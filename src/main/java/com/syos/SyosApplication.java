@@ -1,9 +1,9 @@
 package com.syos;
 
+import java.sql.Connection;
+
 import com.syos.infrastructure.database.ConnectionPool;
 import com.syos.infrastructure.database.ConnectionPoolStats;
-
-import java.sql.Connection;
 
 /**
  * Main application class for SYOS

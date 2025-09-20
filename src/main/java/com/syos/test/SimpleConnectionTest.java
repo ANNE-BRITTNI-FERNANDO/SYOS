@@ -1,13 +1,13 @@
 package com.syos.test;
 
-import com.syos.infrastructure.database.ConnectionPool;
-import com.syos.infrastructure.database.ConnectionPoolStats;
-import com.syos.infrastructure.database.DatabaseConfig;
-
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+
+import com.syos.infrastructure.database.ConnectionPool;
+import com.syos.infrastructure.database.ConnectionPoolStats;
+import com.syos.infrastructure.database.DatabaseConfig;
 
 /**
  * Simple test class to verify database connectivity
