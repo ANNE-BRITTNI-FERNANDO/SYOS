@@ -1,46 +1,57 @@
 package com.syos.infrastructure.database;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.PropertySource;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
 
 /**
  * Database configuration class for SYOS application
  * Contains database connection parameters for XAMPP MySQL
+ * Uses pure Java with properties file loading
  */
-@Configuration
-@PropertySource("classpath:config.properties")
 public class DatabaseConfig {
     
-    @Value("${db.url:jdbc:mysql://localhost:3306/syos_db}")
     private String url;
-    
-    @Value("${db.username:syos_user}")
     private String username;
-    
-    @Value("${db.password:temp1234}")
     private String password;
-    
-    @Value("${db.driver:com.mysql.cj.jdbc.Driver}")
     private String driverClassName;
-    
-    @Value("${db.pool.initial.size:5}")
     private int initialPoolSize;
-    
-    @Value("${db.pool.max.size:20}")
     private int maxPoolSize;
-    
-    @Value("${db.pool.min.idle:5}")
     private int minIdleConnections;
-    
-    @Value("${db.connection.timeout:30000}")
     private long connectionTimeout;
-    
-    @Value("${db.idle.timeout:600000}")
     private long idleTimeout;
-    
-    @Value("${db.max.lifetime:1800000}")
     private long maxLifetime;
+
+    public DatabaseConfig() {
+        loadConfiguration();
+    }
+
+    /**
+     * Load configuration from properties file
+     */
+    private void loadConfiguration() {
+        Properties props = new Properties();
+        
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream("config.properties")) {
+            if (input != null) {
+                props.load(input);
+            }
+        } catch (IOException e) {
+            System.err.println("Warning: Could not load config.properties, using default values");
+        }
+        
+        // Load properties with default values
+        this.url = props.getProperty("db.url", "jdbc:mysql://localhost:3306/syos_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC");
+        this.username = props.getProperty("db.username", "syos_user");
+        this.password = props.getProperty("db.password", "temp1234");
+        this.driverClassName = props.getProperty("db.driver", "com.mysql.cj.jdbc.Driver");
+        this.initialPoolSize = Integer.parseInt(props.getProperty("db.pool.initial.size", "5"));
+        this.maxPoolSize = Integer.parseInt(props.getProperty("db.pool.max.size", "20"));
+        this.minIdleConnections = Integer.parseInt(props.getProperty("db.pool.min.idle", "5"));
+        this.connectionTimeout = Long.parseLong(props.getProperty("db.connection.timeout", "30000"));
+        this.idleTimeout = Long.parseLong(props.getProperty("db.idle.timeout", "600000"));
+        this.maxLifetime = Long.parseLong(props.getProperty("db.max.lifetime", "1800000"));
+    }
 
     // Getters
     public String getUrl() {

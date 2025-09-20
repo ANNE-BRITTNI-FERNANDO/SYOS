@@ -2,8 +2,6 @@ package com.syos.infrastructure.database;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -12,14 +10,18 @@ import java.sql.SQLException;
 /**
  * Connection pool implementation using HikariCP
  * Manages database connections for the SYOS application
+ * Pure Java implementation without Spring framework
  */
-@Component
 public class ConnectionPool {
     
     private final HikariDataSource dataSource;
     private final DatabaseConfig databaseConfig;
     
-    @Autowired
+    public ConnectionPool() {
+        this.databaseConfig = new DatabaseConfig();
+        this.dataSource = createDataSource();
+    }
+    
     public ConnectionPool(DatabaseConfig databaseConfig) {
         this.databaseConfig = databaseConfig;
         this.dataSource = createDataSource();

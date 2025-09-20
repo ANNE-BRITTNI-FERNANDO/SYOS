@@ -1,14 +1,9 @@
 package com.syos.infrastructure.database;
 
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
-
 /**
  * Configuration class for connection pool settings
- * Maps properties from config.properties to Java objects
+ * Pure Java implementation without Spring framework
  */
-@Configuration
-@ConfigurationProperties(prefix = "db.pool")
 public class ConnectionPoolConfig {
     
     private int initialSize = 5;
