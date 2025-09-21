@@ -3,6 +3,7 @@ package syos;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.Scanner;
 import java.util.Base64;
 
@@ -71,6 +72,10 @@ public class Main {
         try {
             connectionPool.getConnection().close();
             System.out.println("Database connection successful!");
+            
+            // Initialize sales tables if they don't exist
+            initializeSalesTables();
+            
         } catch (Exception e) {
             System.err.println("Database connection failed: " + e.getMessage());
             return;
@@ -152,18 +157,16 @@ public class Main {
             System.out.println("5. POS Terminal");
             System.out.println("6. System Reports");
             System.out.println("7. View System Status");
-            System.out.println("8. System Configuration");
-            System.out.println("9. Logout");
-            System.out.println("10. Exit");
+            System.out.println("8. Logout");
+            System.out.println("9. Exit");
         } else if ("MANAGER".equals(role)) {
             System.out.println("1. View My Profile");
             System.out.println("2. Product Management");
             System.out.println("3. Inventory Management");
             System.out.println("4. POS Terminal");
             System.out.println("5. Reports");
-            System.out.println("6. View Team");
-            System.out.println("7. Logout");
-            System.out.println("8. Exit");
+            System.out.println("6. Logout");
+            System.out.println("7. Exit");
         } else {
             System.out.println("1. View My Profile");
             System.out.println("2. View Products");
@@ -200,20 +203,16 @@ public class Main {
                 else return false;
             case 6:
                 if ("ADMIN".equals(role)) return handleSystemReports();
-                else if ("MANAGER".equals(role)) return handleViewTeam();
+                else if ("MANAGER".equals(role)) return logout();
                 else { System.out.println("Invalid choice!"); return true; }
             case 7:
                 if ("ADMIN".equals(role)) return handleSystemStatus();
-                else if ("MANAGER".equals(role)) return logout();
-                else { System.out.println("Invalid choice!"); return true; }
-            case 8:
-                if ("ADMIN".equals(role)) return handleSystemConfiguration();
                 else if ("MANAGER".equals(role)) return false;
                 else { System.out.println("Invalid choice!"); return true; }
-            case 9:
+            case 8:
                 if ("ADMIN".equals(role)) return logout();
                 else { System.out.println("Invalid choice!"); return true; }
-            case 10:
+            case 9:
                 if ("ADMIN".equals(role)) return false;
                 else { System.out.println("Invalid choice!"); return true; }
             default:
@@ -330,7 +329,7 @@ public class Main {
         // Encode password as Base64 (for consistency with existing system)
         String passwordHash = java.util.Base64.getEncoder().encodeToString(password.getBytes());
         
-        String sql = "INSERT INTO users (username, email, password_hash, first_name, last_name, phone_number, role_id, is_active) " +
+        String sql = "INSERT INTO users (username, email, password_hash, first_name, last_name, phone, role_id, is_active) " +
                     "VALUES (?, ?, ?, ?, ?, ?, 1, 1)"; // role_id 1 = Customer
         
         try (Connection conn = connectionPool.getConnection();
@@ -494,7 +493,7 @@ public class Main {
         
         try (Connection conn = connectionPool.getConnection()) {
             String query = "SELECT u.id, u.email, u.first_name, u.last_name, " +
-                          "u.phone_number, r.role_name, u.is_active, u.created_at " +
+                          "u.phone, r.role_name, u.is_active, u.created_at " +
                           "FROM users u " +
                           "JOIN roles r ON u.role_id = r.id " +
                           "ORDER BY u.created_at DESC";
@@ -515,7 +514,7 @@ public class Main {
                         rs.getString("email"),
                         rs.getString("first_name"),
                         rs.getString("last_name"),
-                        rs.getString("phone_number") != null ? rs.getString("phone_number") : "N/A",
+                        rs.getString("phone") != null ? rs.getString("phone") : "N/A",
                         rs.getString("role_name"),
                         rs.getBoolean("is_active") ? "Yes" : "No",
                         rs.getTimestamp("created_at").toString().substring(0, 19)
@@ -592,25 +591,30 @@ public class Main {
             
             // Create user in database
             try (Connection conn = connectionPool.getConnection()) {
+                // Generate unique user code
+                String userCode = generateUserCode(conn, firstName, lastName);
+                
                 // Encode password
                 String encodedPassword = Base64.getEncoder().encodeToString(password.getBytes());
                 
-                String insertQuery = "INSERT INTO users (username, email, password_hash, " +
-                                   "first_name, last_name, phone_number, role_id) " +
-                                   "VALUES (?, ?, ?, ?, ?, ?, ?)";
+                String insertQuery = "INSERT INTO users (user_code, username, email, password_hash, " +
+                                   "first_name, last_name, phone, role_id) " +
+                                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
                     
                 try (PreparedStatement stmt = conn.prepareStatement(insertQuery)) {
-                    stmt.setString(1, username);
-                    stmt.setString(2, email);
-                    stmt.setString(3, encodedPassword);
-                    stmt.setString(4, firstName);
-                    stmt.setString(5, lastName);
-                    stmt.setString(6, phone);
-                    stmt.setInt(7, roleId);
+                    stmt.setString(1, userCode);
+                    stmt.setString(2, username);
+                    stmt.setString(3, email);
+                    stmt.setString(4, encodedPassword);
+                    stmt.setString(5, firstName);
+                    stmt.setString(6, lastName);
+                    stmt.setString(7, phone);
+                    stmt.setInt(8, roleId);
                     
                     int result = stmt.executeUpdate();
                     if (result > 0) {
                         System.out.println("\nUser created successfully!");
+                        System.out.println("User Code: " + userCode);
                         System.out.println("Email: " + email);
                         System.out.println("Name: " + firstName + " " + lastName);
                     } else {
@@ -629,6 +633,43 @@ public class Main {
         System.out.println("Press Enter to continue...");
         scanner.nextLine();
         return true;
+    }
+    
+    private String generateUserCode(Connection conn, String firstName, String lastName) {
+        try {
+            // Generate user code based on first 3 letters of first name + first 3 letters of last name + number
+            String baseCode = (firstName.length() >= 3 ? firstName.substring(0, 3) : firstName) + 
+                             (lastName.length() >= 3 ? lastName.substring(0, 3) : lastName);
+            baseCode = baseCode.toUpperCase().replaceAll("[^A-Z]", "");
+            
+            // If baseCode is too short, pad with 'X'
+            while (baseCode.length() < 4) {
+                baseCode += "X";
+            }
+            
+            // Try different numbers to make it unique
+            for (int i = 1; i <= 999; i++) {
+                String userCode = baseCode + String.format("%03d", i);
+                
+                // Check if this code already exists
+                String checkQuery = "SELECT COUNT(*) FROM users WHERE user_code = ?";
+                try (PreparedStatement stmt = conn.prepareStatement(checkQuery)) {
+                    stmt.setString(1, userCode);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        if (rs.next() && rs.getInt(1) == 0) {
+                            return userCode; // Found unique code
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: use timestamp-based code
+            return "USR" + System.currentTimeMillis() % 100000;
+            
+        } catch (Exception e) {
+            // Emergency fallback
+            return "USR" + System.currentTimeMillis() % 100000;
+        }
     }
     
     private boolean editUser() {
@@ -652,7 +693,7 @@ public class Main {
                             System.out.println("Email: " + rs.getString("email"));
                             System.out.println("First Name: " + rs.getString("first_name"));
                             System.out.println("Last Name: " + rs.getString("last_name"));
-                            System.out.println("Phone: " + (rs.getString("phone_number") != null ? rs.getString("phone_number") : "N/A"));
+                            System.out.println("Phone: " + (rs.getString("phone") != null ? rs.getString("phone") : "N/A"));
                             System.out.println("Role: " + rs.getString("role_name"));
                             System.out.println("Active: " + (rs.getBoolean("is_active") ? "Yes" : "No"));
                             
@@ -666,12 +707,12 @@ public class Main {
                             String newLastName = scanner.nextLine().trim();
                             if (newLastName.isEmpty()) newLastName = rs.getString("last_name");
                             
-                            System.out.print("Phone [" + (rs.getString("phone_number") != null ? rs.getString("phone_number") : "N/A") + "]: ");
+                            System.out.print("Phone [" + (rs.getString("phone") != null ? rs.getString("phone") : "N/A") + "]: ");
                             String newPhone = scanner.nextLine().trim();
-                            if (newPhone.isEmpty()) newPhone = rs.getString("phone_number");
+                            if (newPhone.isEmpty()) newPhone = rs.getString("phone");
                             
                             // Update user
-                            String updateQuery = "UPDATE users SET first_name = ?, last_name = ?, phone_number = ? WHERE id = ?";
+                            String updateQuery = "UPDATE users SET first_name = ?, last_name = ?, phone = ? WHERE id = ?";
                             try (PreparedStatement updateStmt = conn.prepareStatement(updateQuery)) {
                                 updateStmt.setString(1, newFirstName);
                                 updateStmt.setString(2, newLastName);
@@ -841,25 +882,45 @@ public class Main {
         System.out.println("1. View All Products");
         System.out.println("2. Add New Product");
         System.out.println("3. Edit Product");
-        System.out.println("4. Delete Product");
-        System.out.println("5. Manage Categories");
-        System.out.println("6. Set Discounts");
-        System.out.println("7. Back to Main Menu");
-        System.out.println("=".repeat(50));
-        System.out.print("Choose an option (1-7): ");
+        
+        if ("ADMIN".equals(currentUser.getRoleName())) {
+            System.out.println("4. Delete Product");
+            System.out.println("5. Manage Categories");
+            System.out.println("6. Set Discounts");
+            System.out.println("7. Back to Main Menu");
+            System.out.println("=".repeat(50));
+            System.out.print("Choose an option (1-7): ");
+        } else {
+            System.out.println("4. Back to Main Menu");
+            System.out.println("=".repeat(50));
+            System.out.print("Choose an option (1-4): ");
+        }
         
         int choice = getChoice();
-        switch (choice) {
-            case 1: return viewAllProducts();
-            case 2: return addNewProduct();
-            case 3: return editProduct();
-            case 4: return deleteProduct();
-            case 5: return manageCategories();
-            case 6: return setProductDiscounts();
-            case 7: return true;
-            default:
-                System.out.println("Invalid choice! Please enter 1-7.");
-                return true;
+        
+        if ("ADMIN".equals(currentUser.getRoleName())) {
+            switch (choice) {
+                case 1: return viewAllProducts();
+                case 2: return addNewProduct();
+                case 3: return editProduct();
+                case 4: return deleteProduct();
+                case 5: return manageCategories();
+                case 6: return setProductDiscounts();
+                case 7: return true;
+                default:
+                    System.out.println("Invalid choice! Please enter 1-7.");
+                    return true;
+            }
+        } else {
+            switch (choice) {
+                case 1: return viewAllProducts();
+                case 2: return addNewProduct();
+                case 3: return editProduct();
+                case 4: return true;
+                default:
+                    System.out.println("Invalid choice! Please enter 1-4.");
+                    return true;
+            }
         }
     }
     
@@ -943,41 +1004,37 @@ public class Main {
             System.out.println("=".repeat(50));
             
             try {
-                // Show categories first
+                // Show categories hierarchically with codes
                 System.out.println("Available Categories:");
                 try (Connection conn = connectionPool.getConnection()) {
-                    String categoryQuery = "SELECT id, category_code, category_name FROM categories WHERE is_active = true ORDER BY category_name";
-                    try (PreparedStatement stmt = conn.prepareStatement(categoryQuery);
-                         ResultSet rs = stmt.executeQuery()) {
-                        
-                        boolean hasCategories = false;
-                        while (rs.next()) {
-                            hasCategories = true;
-                            System.out.printf("%d. %s - %s%n", 
-                                rs.getInt("id"), 
-                                rs.getString("category_code"), 
-                                rs.getString("category_name"));
-                        }
-                        
-                        if (!hasCategories) {
-                            System.out.println("No categories found! Please add categories first.");
-                            return true;
-                        }
-                    }
+                    displayCategoriesHierarchically(conn);
                     
-                    System.out.print("\nEnter Category ID (number): ");
-                    int categoryId = getChoice();
+                    System.out.println("\n⚠️  IMPORTANT: Products can only be added to SUBCATEGORIES (not main categories)");
+                    System.out.print("Enter Subcategory Code (e.g., LAPTOP, MOBILE, MENS): ");
+                    String categoryCode = scanner.nextLine().trim().toUpperCase();
                     
-                    // Validate category exists
-                    String validateQuery = "SELECT category_name FROM categories WHERE id = ? AND is_active = true";
-                    try (PreparedStatement validateStmt = conn.prepareStatement(validateQuery)) {
+                    // Get category ID by code and validate it's a subcategory
+                    int categoryId = getCategoryByCode(conn, categoryCode);
+                    
+                    // Validate that this is a subcategory, not a main category
+                    String validateSubcategoryQuery = "SELECT category_name, parent_category_id, default_shelf_capacity, default_minimum_threshold FROM categories WHERE id = ?";
+                    try (PreparedStatement validateStmt = conn.prepareStatement(validateSubcategoryQuery)) {
                         validateStmt.setInt(1, categoryId);
                         try (ResultSet validateRs = validateStmt.executeQuery()) {
                             if (!validateRs.next()) {
-                                System.out.println("Invalid category ID! Please select a valid category.");
+                                System.out.println("❌ Invalid category code!");
                                 continue;
                             }
-                            System.out.println("Selected Category: " + validateRs.getString("category_name"));
+                            
+                            Integer parentId = validateRs.getInt("parent_category_id");
+                            if (parentId == 0 || validateRs.wasNull()) {
+                                System.out.println("❌ Cannot add products to main categories! Please select a subcategory.");
+                                System.out.println("   Main categories are organizational containers only.");
+                                continue;
+                            }
+                            
+                            String categoryName = validateRs.getString("category_name");
+                            System.out.println("✅ Valid subcategory selected: " + categoryName);
                         }
                     }
                     
@@ -1021,6 +1078,67 @@ public class Main {
                     String reorderInput = scanner.nextLine().trim();
                     int reorderLevel = reorderInput.isEmpty() ? 50 : Integer.parseInt(reorderInput);
                     
+                    // Shelf Configuration Settings
+                    System.out.println("\nShelf Configuration:");
+                    
+                    // Get subcategory defaults from database
+                    int defaultShelfCapacity = 10; // Fallback default
+                    int defaultMinThreshold = 2;   // Fallback default
+                    
+                    // Query subcategory to get defaults from database
+                    String categoryQuery = "SELECT category_name, default_shelf_capacity, default_minimum_threshold FROM categories WHERE id = ?";
+                    try (PreparedStatement catStmt = conn.prepareStatement(categoryQuery)) {
+                        catStmt.setInt(1, categoryId);
+                        try (ResultSet catRs = catStmt.executeQuery()) {
+                            if (catRs.next()) {
+                                String categoryName = catRs.getString("category_name");
+                                int dbShelfCapacity = catRs.getInt("default_shelf_capacity");
+                                int dbMinThreshold = catRs.getInt("default_minimum_threshold");
+                                
+                                // Only use database values if they're not 0 (0 = main category)
+                                if (dbShelfCapacity > 0) {
+                                    defaultShelfCapacity = dbShelfCapacity;
+                                    defaultMinThreshold = dbMinThreshold;
+                                    System.out.println("Subcategory: " + categoryName + " (default: " + defaultShelfCapacity + " capacity, " + defaultMinThreshold + " threshold)");
+                                } else {
+                                    System.out.println("Subcategory: " + categoryName + " (using general defaults: " + defaultShelfCapacity + " capacity, " + defaultMinThreshold + " threshold)");
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Quick Default Option for subcategories
+                    System.out.println("\nShelf Capacity Options:");
+                    System.out.println("1. Use Subcategory Default (" + defaultShelfCapacity + "/" + defaultMinThreshold + ")");
+                    System.out.println("2. Custom Values");
+                    System.out.print("Select option (1-2): ");
+                    int shelfOption = getChoice();
+                    
+                    int shelfDisplayCapacity;
+                    int shelfMinThreshold;
+                    
+                    if (shelfOption == 1) {
+                        // Use subcategory defaults
+                        shelfDisplayCapacity = defaultShelfCapacity;
+                        shelfMinThreshold = defaultMinThreshold;
+                        System.out.println("✅ Using subcategory defaults: " + shelfDisplayCapacity + " capacity, " + shelfMinThreshold + " threshold");
+                    } else {
+                        // Custom values
+                        System.out.print("Shelf Display Capacity (default " + defaultShelfCapacity + "): ");
+                        String shelfCapInput = scanner.nextLine().trim();
+                        shelfDisplayCapacity = shelfCapInput.isEmpty() ? defaultShelfCapacity : Integer.parseInt(shelfCapInput);
+                        
+                        System.out.print("Shelf Minimum Threshold for Auto-Restock (default " + defaultMinThreshold + "): ");
+                        String minThreshInput = scanner.nextLine().trim();
+                        shelfMinThreshold = minThreshInput.isEmpty() ? defaultMinThreshold : Integer.parseInt(minThreshInput);
+                    }
+                    
+                    System.out.println("Enable Auto-Restock:");
+                    System.out.println("1. Yes (Recommended)  2. No");
+                    System.out.print("Select option (1-2): ");
+                    int autoRestockChoice = getChoice();
+                    boolean autoRestockEnabled = (autoRestockChoice != 2); // Default to true unless explicitly set to No
+                    
                     // Expiry date (optional)
                     System.out.print("Expiry Date (YYYY-MM-DD, optional): ");
                     String expiryInput = scanner.nextLine().trim();
@@ -1049,10 +1167,11 @@ public class Main {
                     // Insert product
                     String insertQuery = "INSERT INTO products (product_code, product_name, description, " +
                                        "category_id, unit_price, brand, unit_of_measure, " +
-                                       "reorder_level, expiry_date, discount_amount, discount_percentage, created_by_user_id) " +
-                                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                                       "reorder_level, expiry_date, discount_amount, discount_percentage, " +
+                                       "shelf_display_capacity, shelf_minimum_threshold, auto_restock_enabled, created_by_user_id) " +
+                                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
                     
-                    try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
+                    try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery, PreparedStatement.RETURN_GENERATED_KEYS)) {
                         insertStmt.setString(1, productCode);
                         insertStmt.setString(2, productName);
                         insertStmt.setString(3, description);
@@ -1064,16 +1183,106 @@ public class Main {
                         insertStmt.setString(9, expiryDate);
                         insertStmt.setDouble(10, discountAmount);
                         insertStmt.setDouble(11, discountPercentage);
-                        insertStmt.setInt(12, currentUser.getId());
+                        insertStmt.setInt(12, shelfDisplayCapacity);
+                        insertStmt.setInt(13, shelfMinThreshold);
+                        insertStmt.setBoolean(14, autoRestockEnabled);
+                        insertStmt.setInt(15, currentUser.getId());
                         
                         int result = insertStmt.executeUpdate();
                         if (result > 0) {
+                            // Get the generated product ID
+                            ResultSet generatedKeys = insertStmt.getGeneratedKeys();
+                            int productId = 0;
+                            if (generatedKeys.next()) {
+                                productId = generatedKeys.getInt(1);
+                            }
+                            generatedKeys.close();
+                            
+                            // Verify we got a valid product ID
+                            if (productId <= 0) {
+                                throw new Exception("Failed to retrieve generated product ID");
+                            }
+                            
+                            System.out.println("✅ Product created with ID: " + productId);
+                            
+                            // Create inventory record with specified quantities using product-specific limits
+                            int shelfQty = 0;
+                            int warehouseQty = 0;
+                            int onlineQty = 0;
+                            
+                            // Distribute quantity based on storage location and product-specific shelf capacity
+                            if (storageLocation.equals("Physical Store")) {
+                                shelfQty = Math.min(quantity, shelfDisplayCapacity); // Use product-specific shelf capacity
+                                warehouseQty = quantity - shelfQty; // Rest in warehouse
+                            } else if (storageLocation.equals("Online Store")) {
+                                onlineQty = quantity;
+                            }
+                            
+                            System.out.println("📦 Creating inventory record:");
+                            System.out.println("  Product ID: " + productId);
+                            System.out.println("  Storage Location: " + storageLocation);
+                            System.out.println("  Total Quantity: " + quantity);
+                            System.out.println("  Product Shelf Capacity: " + shelfDisplayCapacity);
+                            System.out.println("  Shelf: " + shelfQty + ", Warehouse: " + warehouseQty + ", Online: " + onlineQty);
+                            
+                            // Insert into inventory_locations with error handling
+                            String inventoryQuery = "INSERT INTO inventory_locations (product_id, shelf_qty, shelf_capacity, warehouse_qty, online_qty) VALUES (?, ?, ?, ?, ?)";
+                            try (PreparedStatement invStmt = conn.prepareStatement(inventoryQuery)) {
+                                invStmt.setInt(1, productId);
+                                invStmt.setInt(2, shelfQty);
+                                invStmt.setInt(3, shelfDisplayCapacity); // Use product-specific shelf capacity
+                                invStmt.setInt(4, warehouseQty);
+                                invStmt.setInt(5, onlineQty);
+                                
+                                int invResult = invStmt.executeUpdate();
+                                
+                                if (invResult > 0) {
+                                    System.out.println("✅ Inventory record created successfully!");
+                                } else {
+                                    throw new Exception("Inventory record creation returned 0 rows affected");
+                                }
+                            } catch (Exception invException) {
+                                System.out.println("❌ INVENTORY CREATION FAILED:");
+                                System.out.println("   Error: " + invException.getMessage());
+                                System.out.println("   Product ID: " + productId);
+                                System.out.println("   Shelf Qty: " + shelfQty + ", Warehouse Qty: " + warehouseQty + ", Online Qty: " + onlineQty);
+                                invException.printStackTrace();
+                                // Re-throw to fail the entire transaction
+                                throw new Exception("Inventory creation failed: " + invException.getMessage(), invException);
+                            }
+                            
+                            // Log stock movement with error handling
+                            String movementQuery = "INSERT INTO stock_movements (product_id, movement_type, quantity, notes, created_by) VALUES (?, ?, ?, ?, ?)";
+                            try (PreparedStatement moveStmt = conn.prepareStatement(movementQuery)) {
+                                moveStmt.setInt(1, productId);
+                                moveStmt.setString(2, "INITIAL_STOCK_" + (storageLocation.equals("Physical Store") ? "PHYSICAL" : "ONLINE"));
+                                moveStmt.setInt(3, quantity);
+                                moveStmt.setString(4, "Initial stock for new product: " + productName);
+                                moveStmt.setString(5, currentUser.getFullName());
+                                
+                                int moveResult = moveStmt.executeUpdate();
+                                
+                                if (moveResult > 0) {
+                                    System.out.println("✅ Stock movement logged successfully!");
+                                } else {
+                                    System.out.println("⚠️ Warning: Stock movement logging returned 0 rows affected");
+                                }
+                            } catch (Exception moveException) {
+                                System.out.println("❌ STOCK MOVEMENT LOGGING FAILED:");
+                                System.out.println("   Error: " + moveException.getMessage());
+                                // Don't fail the transaction for movement logging, but warn user
+                            }
+                            
                             System.out.println("\n✅ Product created successfully!");
                             System.out.println("Product Code: " + productCode);
                             System.out.println("Product Name: " + productName);
                             System.out.println("Unit of Measure: " + unitOfMeasure);
                             System.out.println("Price: LKR " + unitPrice + " per " + unitOfMeasure);
-                            System.out.println("Note: Quantity (" + quantity + ") and Storage Location (" + storageLocation + ") will be managed in Inventory system");
+                            System.out.println("✅ Inventory Created:");
+                            System.out.println("  Shelf Stock: " + shelfQty + " units");
+                            System.out.println("  Warehouse Stock: " + warehouseQty + " units");
+                            System.out.println("  Online Stock: " + onlineQty + " units");
+                            System.out.println("  Total Stock: " + quantity + " units");
                             
                             if (expiryDate != null) {
                                 System.out.println("Expiry Date: " + expiryDate);
@@ -1249,19 +1458,10 @@ public class Main {
             System.out.println("=".repeat(40));
             
             try {
-                // Show available categories first
+                // Show available categories hierarchically
                 System.out.println("Available Categories:");
                 try (Connection conn = connectionPool.getConnection()) {
-                    String categoryQuery = "SELECT id, category_code, category_name FROM categories WHERE is_active = true ORDER BY category_name";
-                    try (PreparedStatement stmt = conn.prepareStatement(categoryQuery);
-                         ResultSet rs = stmt.executeQuery()) {
-                        
-                        while (rs.next()) {
-                            System.out.printf("%s - %s%n", 
-                                rs.getString("category_code"), 
-                                rs.getString("category_name"));
-                        }
-                    }
+                    displayCategoriesHierarchically(conn);
                     
                     System.out.print("\nEnter Category Code (e.g., CAT001) or 'back' to return: ");
                     String categoryCode = scanner.nextLine().trim().toUpperCase();
@@ -1634,6 +1834,38 @@ public class Main {
                 String isSubCategory = scanner.nextLine().trim().toLowerCase();
                 
                 Integer parentCategoryId = null;
+                boolean isMainCategory = !isSubCategory.startsWith("y");
+                
+                // Get default shelf values only for subcategories (where products will be stored)
+                int defaultShelfCapacity = 10; // Default fallback
+                int defaultMinThreshold = 2;   // Default fallback
+                
+                if (!isMainCategory) {
+                    // Only subcategories need shelf defaults since products go there
+                    System.out.println("\nShelf Default Values (for products in this subcategory):");
+                    System.out.print("Default Shelf Capacity (1-100): ");
+                    defaultShelfCapacity = getChoice();
+                    if (defaultShelfCapacity < 1 || defaultShelfCapacity > 100) {
+                        System.out.println("Invalid capacity! Using default: 10");
+                        defaultShelfCapacity = 10;
+                    }
+                    
+                    System.out.print("Default Minimum Threshold (1-50): ");
+                    defaultMinThreshold = getChoice();
+                    if (defaultMinThreshold < 1 || defaultMinThreshold > 50) {
+                        System.out.println("Invalid threshold! Using default: 2");
+                        defaultMinThreshold = 2;
+                    }
+                    
+                    System.out.printf("Products in this subcategory will default to: %d shelf capacity, %d minimum threshold%n", 
+                        defaultShelfCapacity, defaultMinThreshold);
+                } else {
+                    // Main categories are just organizational containers
+                    System.out.println("\nMain category created - products will be added to subcategories under this category.");
+                    defaultShelfCapacity = 0; // No shelf defaults for main categories
+                    defaultMinThreshold = 0;
+                }
+                
                 if (isSubCategory.startsWith("y")) {
                     // Show available main categories
                     System.out.println("\nAvailable Main Categories:");
@@ -1694,7 +1926,7 @@ public class Main {
                     }
                     
                     // Insert category
-                    String insertQuery = "INSERT INTO categories (category_code, category_name, description, parent_category_id) VALUES (?, ?, ?, ?)";
+                    String insertQuery = "INSERT INTO categories (category_code, category_name, description, parent_category_id, default_shelf_capacity, default_minimum_threshold) VALUES (?, ?, ?, ?, ?, ?)";
                     try (PreparedStatement stmt = conn.prepareStatement(insertQuery)) {
                         stmt.setString(1, categoryCode);
                         stmt.setString(2, categoryName);
@@ -1704,6 +1936,8 @@ public class Main {
                         } else {
                             stmt.setNull(4, java.sql.Types.INTEGER);
                         }
+                        stmt.setInt(5, defaultShelfCapacity);
+                        stmt.setInt(6, defaultMinThreshold);
                         
                         int result = stmt.executeUpdate();
                         if (result > 0) {
@@ -1715,6 +1949,8 @@ public class Main {
                             } else {
                                 System.out.println("Type: Main category");
                             }
+                            System.out.println("Default Shelf Capacity: " + defaultShelfCapacity);
+                            System.out.println("Default Minimum Threshold: " + defaultMinThreshold);
                         } else {
                             System.out.println("❌ Failed to create category!");
                         }
@@ -2362,30 +2598,57 @@ public class Main {
             System.out.println("\nINVENTORY MANAGEMENT");
             System.out.println("=".repeat(40));
             System.out.println("1. Track Stock Levels");
-            System.out.println("2. Transfer Between Locations");
-            System.out.println("3. Check Low Stock Alerts");
-            System.out.println("4. Expiry Date Management");
-            System.out.println("5. Back to Main Menu");
-            System.out.print("Choose an option (1-5): ");
+            
+            if ("ADMIN".equals(currentUser.getRoleName())) {
+                System.out.println("2. Transfer Between Locations");
+                System.out.println("3. Check Low Stock Alerts");
+                System.out.println("4. Expiry Date Management");
+                System.out.println("5. Back to Main Menu");
+                System.out.print("Choose an option (1-5): ");
+            } else {
+                System.out.println("2. Check Low Stock Alerts");
+                System.out.println("3. Expiry Date Management");
+                System.out.println("4. Back to Main Menu");
+                System.out.print("Choose an option (1-4): ");
+            }
             
             int choice = getChoice();
-            switch (choice) {
-                case 1:
-                    if (!trackStockLevels()) return false;
-                    break;
-                case 2:
-                    if (!transferBetweenLocations()) return false;
-                    break;
-                case 3:
-                    if (!checkLowStockAlerts()) return false;
-                    break;
-                case 4:
-                    if (!manageExpiryDates()) return false;
-                    break;
-                case 5:
-                    return true;
-                default:
-                    System.out.println("Invalid choice! Please enter 1-5.");
+            
+            if ("ADMIN".equals(currentUser.getRoleName())) {
+                switch (choice) {
+                    case 1:
+                        if (!trackStockLevels()) return false;
+                        break;
+                    case 2:
+                        if (!transferBetweenLocations()) return false;
+                        break;
+                    case 3:
+                        if (!checkLowStockAlerts()) return false;
+                        break;
+                    case 4:
+                        if (!manageExpiryDates()) return false;
+                        break;
+                    case 5:
+                        return true;
+                    default:
+                        System.out.println("Invalid choice! Please enter 1-5.");
+                }
+            } else {
+                switch (choice) {
+                    case 1:
+                        if (!trackStockLevels()) return false;
+                        break;
+                    case 2:
+                        if (!checkLowStockAlerts()) return false;
+                        break;
+                    case 3:
+                        if (!manageExpiryDates()) return false;
+                        break;
+                    case 4:
+                        return true;
+                    default:
+                        System.out.println("Invalid choice! Please enter 1-4.");
+                }
             }
         }
     }
@@ -2435,29 +2698,828 @@ public class Main {
     
     private boolean handleSystemReports() {
         System.out.println("\nSYSTEM REPORTS (ADMIN ACCESS)");
-        System.out.println("─".repeat(40));
-        System.out.println("Available Reports:");
-        System.out.println("1. Sales analysis");
-        System.out.println("2. Inventory turnover");
-        System.out.println("3. User activity logs");
-        System.out.println("4. Financial summaries");
-        System.out.println("5. System performance metrics");
-        System.out.println("\nFull implementation coming soon!");
-        System.out.println("Press Enter to continue...");
+        System.out.println("─".repeat(50));
+        System.out.println("📊 Available Business Intelligence Reports:");
+        System.out.println("1. Daily Sales Analysis");
+        System.out.println("2. Inventory Reports");
+        System.out.println("3. Reorder Levels Analysis");
+        System.out.println("4. Stock Reports");
+        System.out.println("5. Bill Reports");
+        System.out.println("6. Customer Analytics");
+        System.out.println("7. Back to Main Menu");
+        System.out.println("─".repeat(50));
+        System.out.print("Choose report option (1-7): ");
+        
+        int choice = getChoice();
+        switch (choice) {
+            case 1: return handleDailySalesAnalysis();
+            case 2: return handleInventoryReports();
+            case 3: return handleReorderLevelsAnalysis();
+            case 4: return handleStockReports();
+            case 5: return handleBillReports();
+            case 6: return handleCustomerAnalytics();
+            case 7: return true;
+            default:
+                System.out.println("Invalid choice!");
+                return true;
+        }
+    }
+    
+    private boolean handleDailySalesAnalysis() {
+        System.out.println("\n📈 DAILY SALES ANALYSIS");
+        System.out.println("═".repeat(60));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            // Today's sales summary
+            String todayQuery = "SELECT COUNT(*) as transaction_count, " +
+                              "SUM(final_amount) as total_sales, " +
+                              "AVG(final_amount) as avg_transaction_value " +
+                              "FROM sales " +
+                              "WHERE DATE(sale_date) = CURDATE()";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(todayQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                if (rs.next()) {
+                    int transactionCount = rs.getInt("transaction_count");
+                    double totalSales = rs.getDouble("total_sales");
+                    double avgTransaction = rs.getDouble("avg_transaction_value");
+                    
+                    System.out.println("📅 TODAY'S SALES SUMMARY:");
+                    System.out.println("─".repeat(40));
+                    System.out.println("Total Transactions: " + transactionCount);
+                    System.out.println("Total Sales: LKR " + String.format("%.2f", totalSales));
+                    System.out.println("Average Transaction: LKR " + String.format("%.2f", avgTransaction));
+                    System.out.println();
+                }
+            }
+            
+            // Top selling products today
+            System.out.println("🏆 TOP SELLING PRODUCTS TODAY:");
+            System.out.println("─".repeat(40));
+            String topProductsQuery = "SELECT p.product_name, " +
+                                    "SUM(si.quantity) as total_quantity, " +
+                                    "SUM(si.total_price) as total_revenue " +
+                                    "FROM sale_items si " +
+                                    "JOIN sales s ON si.sale_id = s.id " +
+                                    "JOIN products p ON si.product_id = p.id " +
+                                    "WHERE DATE(s.sale_date) = CURDATE() " +
+                                    "GROUP BY p.id, p.product_name " +
+                                    "ORDER BY total_quantity DESC " +
+                                    "LIMIT 10";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(topProductsQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                int rank = 1;
+                while (rs.next()) {
+                    String productName = rs.getString("product_name");
+                    int quantity = rs.getInt("total_quantity");
+                    double revenue = rs.getDouble("total_revenue");
+                    
+                    System.out.printf("%d. %s - Qty: %d, Revenue: LKR %.2f%n", 
+                                    rank++, productName, quantity, revenue);
+                }
+                
+                if (rank == 1) {
+                    System.out.println("No sales recorded for today yet.");
+                }
+            }
+            
+        } catch (Exception e) {
+            System.out.println("⚠️ Error generating sales analysis: " + e.getMessage());
+            System.out.println("Note: Ensure transaction tables exist and contain data.");
+        }
+        
+        System.out.println("\nPress Enter to continue...");
+        scanner.nextLine();
+        return true;
+    }
+    
+    private boolean handleInventoryReports() {
+        System.out.println("\n📦 INVENTORY REPORTS");
+        System.out.println("═".repeat(60));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            // Current inventory status
+            System.out.println("📊 CURRENT INVENTORY STATUS:");
+            System.out.println("─".repeat(50));
+            
+            String inventoryQuery = "SELECT p.product_name, p.product_code, " +
+                                  "COALESCE(il.shelf_qty, 0) as shelf_qty, " +
+                                  "COALESCE(il.shelf_capacity, 50) as shelf_capacity, " +
+                                  "COALESCE(il.warehouse_qty, 0) as warehouse_qty, " +
+                                  "COALESCE(il.online_qty, 0) as online_qty, " +
+                                  "(COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) + COALESCE(il.online_qty, 0)) as total_stock " +
+                                  "FROM products p " +
+                                  "LEFT JOIN inventory_locations il ON p.id = il.product_id " +
+                                  "ORDER BY total_stock ASC";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(inventoryQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-20s %-10s %-8s %-8s %-8s %-8s %-10s%n", 
+                                "Product", "Code", "Shelf", "Capacity", "Warehouse", "Online", "Total");
+                System.out.println("─".repeat(80));
+                
+                while (rs.next()) {
+                    String name = rs.getString("product_name");
+                    String code = rs.getString("product_code");
+                    int shelfQty = rs.getInt("shelf_qty");
+                    int shelfCapacity = rs.getInt("shelf_capacity");
+                    int warehouseQty = rs.getInt("warehouse_qty");
+                    int onlineQty = rs.getInt("online_qty");
+                    int totalStock = rs.getInt("total_stock");
+                    
+                    System.out.printf("%-20s %-10s %-8d %-8d %-8d %-8d %-10d%n", 
+                                    name.length() > 20 ? name.substring(0, 17) + "..." : name,
+                                    code, shelfQty, shelfCapacity, warehouseQty, onlineQty, totalStock);
+                }
+            }
+            
+        } catch (Exception e) {
+            System.out.println("⚠️ Error generating inventory report: " + e.getMessage());
+            System.out.println("Note: Ensure inventory_locations table exists.");
+        }
+        
+        System.out.println("\nPress Enter to continue...");
+        scanner.nextLine();
+        return true;
+    }
+    
+    private boolean handleReorderLevelsAnalysis() {
+        System.out.println("\n🔄 REORDER LEVELS ANALYSIS");
+        System.out.println("═".repeat(60));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            System.out.println("⚠️ PRODUCTS REQUIRING IMMEDIATE REORDER:");
+            System.out.println("─".repeat(50));
+            
+            // Products with low stock (less than 20% of shelf capacity)
+            String reorderQuery = "SELECT p.product_name, p.product_code, " +
+                                "COALESCE(il.shelf_qty, 0) as shelf_qty, " +
+                                "COALESCE(il.shelf_capacity, 50) as shelf_capacity, " +
+                                "(COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0)) as total_available, " +
+                                "ROUND((COALESCE(il.shelf_qty, 0) / COALESCE(il.shelf_capacity, 50)) * 100, 1) as fill_percentage " +
+                                "FROM products p " +
+                                "LEFT JOIN inventory_locations il ON p.id = il.product_id " +
+                                "WHERE (COALESCE(il.shelf_qty, 0) / COALESCE(il.shelf_capacity, 50)) < 0.2 " +
+                                "ORDER BY fill_percentage ASC";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(reorderQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-25s %-10s %-8s %-8s %-10s %-12s%n", 
+                                "Product", "Code", "Current", "Capacity", "Available", "Fill %");
+                System.out.println("─".repeat(75));
+                
+                int criticalCount = 0;
+                while (rs.next()) {
+                    String name = rs.getString("product_name");
+                    String code = rs.getString("product_code");
+                    int shelfQty = rs.getInt("shelf_qty");
+                    int shelfCapacity = rs.getInt("shelf_capacity");
+                    int totalAvailable = rs.getInt("total_available");
+                    double fillPercentage = rs.getDouble("fill_percentage");
+                    
+                    String status = fillPercentage == 0 ? "🔴 EMPTY" : 
+                                  fillPercentage < 10 ? "🟠 CRITICAL" : "🟡 LOW";
+                    
+                    System.out.printf("%-25s %-10s %-8d %-8d %-10d %s %.1f%%%n", 
+                                    name.length() > 25 ? name.substring(0, 22) + "..." : name,
+                                    code, shelfQty, shelfCapacity, totalAvailable, status, fillPercentage);
+                    criticalCount++;
+                }
+                
+                if (criticalCount == 0) {
+                    System.out.println("✅ All products are adequately stocked!");
+                } else {
+                    System.out.println("\n📋 RECOMMENDATION:");
+                    System.out.println("Consider reordering " + criticalCount + " products to maintain optimal stock levels.");
+                }
+            }
+            
+        } catch (Exception e) {
+            System.out.println("⚠️ Error generating reorder analysis: " + e.getMessage());
+        }
+        
+        System.out.println("\nPress Enter to continue...");
+        scanner.nextLine();
+        return true;
+    }
+    
+    private boolean handleStockReports() {
+        System.out.println("\n📋 COMPREHENSIVE STOCK ANALYSIS");
+        System.out.println("═".repeat(80));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            // 1. STOCK VALUE ANALYSIS BY CATEGORY
+            System.out.println("💰 STOCK VALUE ANALYSIS BY CATEGORY:");
+            System.out.println("─".repeat(80));
+            
+            String categoryValueQuery = "SELECT c.category_name, " +
+                                      "COUNT(p.id) as product_count, " +
+                                      "SUM((COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) + COALESCE(il.online_qty, 0)) * p.unit_price) as category_value, " +
+                                      "AVG(p.unit_price) as avg_unit_price, " +
+                                      "SUM(COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) + COALESCE(il.online_qty, 0)) as total_quantity " +
+                                      "FROM categories c " +
+                                      "LEFT JOIN products p ON c.id = p.category_id " +
+                                      "LEFT JOIN inventory_locations il ON p.id = il.product_id " +
+                                      "WHERE p.is_active = TRUE " +
+                                      "GROUP BY c.id, c.category_name " +
+                                      "ORDER BY category_value DESC";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(categoryValueQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                double totalValue = 0;
+                System.out.printf("%-20s %-8s %-12s %-12s %-10s %-15s%n", 
+                                "Category", "Products", "Avg Price", "Total Qty", "Value", "% of Total");
+                System.out.println("─".repeat(85));
+                
+                // First pass to calculate total for percentages
+                java.util.List<String[]> categoryData = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    String categoryName = rs.getString("category_name");
+                    int productCount = rs.getInt("product_count");
+                    double categoryValue = rs.getDouble("category_value");
+                    double avgPrice = rs.getDouble("avg_unit_price");
+                    int totalQty = rs.getInt("total_quantity");
+                    totalValue += categoryValue;
+                    
+                    categoryData.add(new String[]{categoryName, String.valueOf(productCount), 
+                                                String.format("%.2f", avgPrice), String.valueOf(totalQty), 
+                                                String.format("%.2f", categoryValue)});
+                }
+                
+                // Second pass to display with percentages
+                for (String[] data : categoryData) {
+                    double value = Double.parseDouble(data[4]);
+                    double percentage = totalValue > 0 ? (value / totalValue) * 100 : 0;
+                    System.out.printf("%-20s %-8s LKR %-8s %-10s LKR %-11s %.1f%%%n", 
+                                    data[0], data[1], data[2], data[3], data[4], percentage);
+                }
+                
+                System.out.println("─".repeat(85));
+                System.out.printf("TOTAL STOCK VALUE: LKR %.2f%n", totalValue);
+                System.out.println();
+            }
+            
+            // 2. DETAILED PRODUCT STOCK STATUS
+            System.out.println("📦 DETAILED PRODUCT INVENTORY STATUS:");
+            System.out.println("─".repeat(100));
+            
+            String detailedStockQuery = "SELECT p.product_code, p.product_name, p.brand, c.category_name, " +
+                                      "p.unit_price, " +
+                                      "COALESCE(il.shelf_qty, 0) as shelf_qty, " +
+                                      "COALESCE(il.shelf_capacity, 50) as shelf_capacity, " +
+                                      "COALESCE(il.warehouse_qty, 0) as warehouse_qty, " +
+                                      "COALESCE(il.online_qty, 0) as online_qty, " +
+                                      "(COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) + COALESCE(il.online_qty, 0)) as total_stock, " +
+                                      "(COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) + COALESCE(il.online_qty, 0)) * p.unit_price as stock_value, " +
+                                      "p.reorder_level, " +
+                                      "CASE " +
+                                      "  WHEN (COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0)) = 0 THEN 'OUT_OF_STOCK' " +
+                                      "  WHEN (COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0)) <= p.reorder_level THEN 'LOW_STOCK' " +
+                                      "  WHEN (COALESCE(il.shelf_qty, 0) / COALESCE(il.shelf_capacity, 50)) > 0.8 THEN 'WELL_STOCKED' " +
+                                      "  ELSE 'NORMAL' " +
+                                      "END as stock_status " +
+                                      "FROM products p " +
+                                      "LEFT JOIN categories c ON p.category_id = c.id " +
+                                      "LEFT JOIN inventory_locations il ON p.id = il.product_id " +
+                                      "WHERE p.is_active = TRUE " +
+                                      "ORDER BY stock_value DESC, p.product_name";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(detailedStockQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-12s %-25s %-15s %-8s %-6s %-6s %-6s %-8s %-12s %-12s%n", 
+                                "Code", "Product", "Category", "Price", "Shelf", "Warehouse", "Online", "Total", "Value", "Status");
+                System.out.println("─".repeat(120));
+                
+                while (rs.next()) {
+                    String code = rs.getString("product_code");
+                    String name = rs.getString("product_name");
+                    String brand = rs.getString("brand");
+                    String category = rs.getString("category_name");
+                    double price = rs.getDouble("unit_price");
+                    int shelfQty = rs.getInt("shelf_qty");
+                    int warehouseQty = rs.getInt("warehouse_qty");
+                    int onlineQty = rs.getInt("online_qty");
+                    int totalStock = rs.getInt("total_stock");
+                    double stockValue = rs.getDouble("stock_value");
+                    String status = rs.getString("stock_status");
+                    
+                    String displayName = (name + (brand != null ? " (" + brand + ")" : ""));
+                    if (displayName.length() > 25) displayName = displayName.substring(0, 22) + "...";
+                    
+                    String statusIcon = "";
+                    switch (status) {
+                        case "OUT_OF_STOCK": statusIcon = "🔴 " + status; break;
+                        case "LOW_STOCK": statusIcon = "🟡 " + status; break;
+                        case "WELL_STOCKED": statusIcon = "🟢 " + status; break;
+                        default: statusIcon = "⚪ " + status; break;
+                    }
+                    
+                    System.out.printf("%-12s %-25s %-15s %-8.0f %-6d %-9d %-6d %-8d LKR %-8.0f %s%n", 
+                                    code, displayName, 
+                                    category != null ? (category.length() > 15 ? category.substring(0, 12) + "..." : category) : "N/A",
+                                    price, shelfQty, warehouseQty, onlineQty, totalStock, stockValue, statusIcon);
+                }
+            }
+            
+            // 3. STOCK MOVEMENT ANALYSIS (Enhanced)
+            System.out.println("\n📊 DETAILED STOCK MOVEMENTS (Last 7 Days):");
+            System.out.println("─".repeat(80));
+            
+            String movementQuery = "SELECT movement_type, " +
+                                 "COUNT(*) as movement_count, " +
+                                 "SUM(quantity) as total_quantity, " +
+                                 "AVG(quantity) as avg_quantity " +
+                                 "FROM stock_movements " +
+                                 "WHERE movement_date >= DATE_SUB(NOW(), INTERVAL 7 DAY) " +
+                                 "GROUP BY movement_type " +
+                                 "ORDER BY total_quantity DESC";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(movementQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-25s %-10s %-15s %-15s%n", "Movement Type", "Count", "Total Quantity", "Avg Per Movement");
+                System.out.println("─".repeat(70));
+                
+                while (rs.next()) {
+                    String movementType = rs.getString("movement_type");
+                    int count = rs.getInt("movement_count");
+                    int totalQty = rs.getInt("total_quantity");
+                    double avgQty = rs.getDouble("avg_quantity");
+                    
+                    System.out.printf("%-25s %-10d %-15d %-15.1f%n", 
+                                    movementType, count, totalQty, avgQty);
+                }
+            }
+            
+            // 4. CRITICAL STOCK ALERTS
+            System.out.println("\n⚠️ CRITICAL STOCK ALERTS:");
+            System.out.println("─".repeat(80));
+            
+            String criticalStockQuery = "SELECT p.product_code, p.product_name, p.brand, " +
+                                      "COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) as available_stock, " +
+                                      "p.reorder_level, " +
+                                      "(p.reorder_level - (COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0))) as shortage, " +
+                                      "p.unit_price * (p.reorder_level - (COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0))) as reorder_cost " +
+                                      "FROM products p " +
+                                      "LEFT JOIN inventory_locations il ON p.id = il.product_id " +
+                                      "WHERE (COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0)) <= p.reorder_level " +
+                                      "AND p.is_active = TRUE " +
+                                      "ORDER BY shortage DESC";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(criticalStockQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-12s %-25s %-10s %-12s %-10s %-15s%n", 
+                                "Code", "Product", "Available", "Reorder Level", "Shortage", "Reorder Cost");
+                System.out.println("─".repeat(85));
+                
+                double totalReorderCost = 0;
+                int criticalCount = 0;
+                
+                while (rs.next()) {
+                    String code = rs.getString("product_code");
+                    String name = rs.getString("product_name");
+                    String brand = rs.getString("brand");
+                    int available = rs.getInt("available_stock");
+                    int reorderLevel = rs.getInt("reorder_level");
+                    int shortage = rs.getInt("shortage");
+                    double reorderCost = rs.getDouble("reorder_cost");
+                    
+                    String displayName = (name + (brand != null ? " (" + brand + ")" : ""));
+                    if (displayName.length() > 25) displayName = displayName.substring(0, 22) + "...";
+                    
+                    System.out.printf("%-12s %-25s %-10d %-12d %-10d LKR %-12.2f%n", 
+                                    code, displayName, available, reorderLevel, shortage, reorderCost);
+                    
+                    totalReorderCost += reorderCost;
+                    criticalCount++;
+                }
+                
+                if (criticalCount == 0) {
+                    System.out.println("✅ No critical stock alerts! All products are adequately stocked.");
+                } else {
+                    System.out.println("─".repeat(85));
+                    System.out.printf("📋 SUMMARY: %d products need reordering | Total Cost: LKR %.2f%n", 
+                                    criticalCount, totalReorderCost);
+                }
+            }
+            
+            // 5. TOP VALUE PRODUCTS
+            System.out.println("\n💎 TOP 10 MOST VALUABLE PRODUCTS (By Total Stock Value):");
+            System.out.println("─".repeat(80));
+            
+            String topValueQuery = "SELECT p.product_code, p.product_name, p.brand, " +
+                                 "p.unit_price, " +
+                                 "(COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) + COALESCE(il.online_qty, 0)) as total_qty, " +
+                                 "(COALESCE(il.shelf_qty, 0) + COALESCE(il.warehouse_qty, 0) + COALESCE(il.online_qty, 0)) * p.unit_price as stock_value " +
+                                 "FROM products p " +
+                                 "LEFT JOIN inventory_locations il ON p.id = il.product_id " +
+                                 "WHERE p.is_active = TRUE " +
+                                 "ORDER BY stock_value DESC " +
+                                 "LIMIT 10";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(topValueQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-4s %-12s %-25s %-10s %-8s %-15s%n", 
+                                "Rank", "Code", "Product", "Unit Price", "Quantity", "Total Value");
+                System.out.println("─".repeat(80));
+                
+                int rank = 1;
+                while (rs.next()) {
+                    String code = rs.getString("product_code");
+                    String name = rs.getString("product_name");
+                    String brand = rs.getString("brand");
+                    double unitPrice = rs.getDouble("unit_price");
+                    int quantity = rs.getInt("total_qty");
+                    double stockValue = rs.getDouble("stock_value");
+                    
+                    String displayName = (name + (brand != null ? " (" + brand + ")" : ""));
+                    if (displayName.length() > 25) displayName = displayName.substring(0, 22) + "...";
+                    
+                    System.out.printf("%-4d %-12s %-25s LKR %-6.0f %-8d LKR %-12.2f%n", 
+                                    rank++, code, displayName, unitPrice, quantity, stockValue);
+                }
+            }
+            
+        } catch (Exception e) {
+            System.out.println("⚠️ Error generating comprehensive stock report: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        System.out.println("\n📋 STOCK VALUE EXPLANATION:");
+        System.out.println("Stock Value = Quantity in Inventory × Unit Price");
+        System.out.println("This shows how much money is 'tied up' in your inventory.");
+        System.out.println("High stock values indicate major inventory investments.");
+        
+        System.out.println("\nPress Enter to continue...");
+        scanner.nextLine();
+        return true;
+    }
+    
+    private boolean handleBillReports() {
+        System.out.println("\n🧾 BILL REPORTS");
+        System.out.println("═".repeat(60));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            // Recent transactions
+            System.out.println("📋 RECENT TRANSACTIONS (Last 24 Hours):");
+            System.out.println("─".repeat(60));
+            
+            String recentBillsQuery = "SELECT s.bill_number, s.final_amount, s.sale_date, " +
+                                    "COALESCE(s.customer_name, 'Walk-in Customer') as customer_name " +
+                                    "FROM sales s " +
+                                    "WHERE s.sale_date >= DATE_SUB(NOW(), INTERVAL 24 HOUR) " +
+                                    "ORDER BY s.sale_date DESC " +
+                                    "LIMIT 20";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(recentBillsQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-12s %-15s %-20s %-20s%n", "Bill No.", "Amount", "Customer", "Date/Time");
+                System.out.println("─".repeat(70));
+                
+                while (rs.next()) {
+                    String billNumber = rs.getString("bill_number");
+                    double amount = rs.getDouble("final_amount");
+                    String customerName = rs.getString("customer_name");
+                    String transactionDate = rs.getString("sale_date");
+                    
+                    System.out.printf("%-12s LKR %-12.2f %-20s %s%n", 
+                                    billNumber, amount, 
+                                    customerName.length() > 20 ? customerName.substring(0, 17) + "..." : customerName,
+                                    transactionDate.substring(0, 16));
+                }
+            }
+            
+            // Bill statistics
+            System.out.println("\n📊 BILL STATISTICS (Last 7 Days):");
+            System.out.println("─".repeat(40));
+            
+            String billStatsQuery = "SELECT " +
+                                  "COUNT(*) as total_bills, " +
+                                  "SUM(final_amount) as total_revenue, " +
+                                  "AVG(final_amount) as avg_bill_amount, " +
+                                  "MAX(final_amount) as highest_bill, " +
+                                  "MIN(final_amount) as lowest_bill " +
+                                  "FROM sales " +
+                                  "WHERE sale_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(billStatsQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                if (rs.next()) {
+                    int totalBills = rs.getInt("total_bills");
+                    double totalRevenue = rs.getDouble("total_revenue");
+                    double avgBillAmount = rs.getDouble("avg_bill_amount");
+                    double highestBill = rs.getDouble("highest_bill");
+                    double lowestBill = rs.getDouble("lowest_bill");
+                    
+                    System.out.println("Total Bills: " + totalBills);
+                    System.out.println("Total Revenue: LKR " + String.format("%.2f", totalRevenue));
+                    System.out.println("Average Bill Amount: LKR " + String.format("%.2f", avgBillAmount));
+                    System.out.println("Highest Bill: LKR " + String.format("%.2f", highestBill));
+                    System.out.println("Lowest Bill: LKR " + String.format("%.2f", lowestBill));
+                }
+            }
+            
+        } catch (Exception e) {
+            System.out.println("⚠️ Error generating bill report: " + e.getMessage());
+            System.out.println("Note: Ensure transaction tables exist and contain data.");
+        }
+        
+        System.out.println("\nPress Enter to continue...");
+        scanner.nextLine();
+        return true;
+    }
+    
+    private boolean handleCustomerAnalytics() {
+        System.out.println("\n👥 CUSTOMER ANALYTICS");
+        System.out.println("═".repeat(60));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            // Customer registration stats
+            System.out.println("📈 CUSTOMER REGISTRATION TRENDS:");
+            System.out.println("─".repeat(40));
+            
+            String customerStatsQuery = "SELECT " +
+                                      "COUNT(DISTINCT customer_phone) as total_customers, " +
+                                      "COUNT(DISTINCT CASE WHEN sale_date >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN customer_phone END) as new_this_month, " +
+                                      "COUNT(DISTINCT CASE WHEN sale_date >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN customer_phone END) as new_this_week " +
+                                      "FROM sales WHERE customer_phone IS NOT NULL";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(customerStatsQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                if (rs.next()) {
+                    int totalCustomers = rs.getInt("total_customers");
+                    int newThisMonth = rs.getInt("new_this_month");
+                    int newThisWeek = rs.getInt("new_this_week");
+                    
+                    System.out.println("Total Registered Customers: " + totalCustomers);
+                    System.out.println("New Customers This Month: " + newThisMonth);
+                    System.out.println("New Customers This Week: " + newThisWeek);
+                    System.out.println();
+                }
+            }
+            
+            // Top customers by purchase value
+            System.out.println("🏆 TOP CUSTOMERS BY PURCHASE VALUE:");
+            System.out.println("─".repeat(50));
+            
+            String topCustomersQuery = "SELECT s.customer_name, s.customer_phone, " +
+                                     "COUNT(s.id) as total_transactions, " +
+                                     "SUM(s.final_amount) as total_spent " +
+                                     "FROM sales s " +
+                                     "WHERE s.customer_name IS NOT NULL AND s.customer_name != 'Walk-in Customer' " +
+                                     "GROUP BY s.customer_name, s.customer_phone " +
+                                     "ORDER BY total_spent DESC " +
+                                     "LIMIT 10";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(topCustomersQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                System.out.printf("%-20s %-15s %-12s %-15s%n", "Customer", "Phone", "Transactions", "Total Spent");
+                System.out.println("─".repeat(65));
+                
+                int rank = 1;
+                while (rs.next()) {
+                    String customerName = rs.getString("customer_name");
+                    String phoneNumber = rs.getString("customer_phone");
+                    int totalTransactions = rs.getInt("total_transactions");
+                    double totalSpent = rs.getDouble("total_spent");
+                    
+                    System.out.printf("%d. %-18s %-15s %-12d LKR %-12.2f%n", 
+                                    rank++,
+                                    customerName != null ? (customerName.length() > 18 ? customerName.substring(0, 15) + "..." : customerName) : "N/A",
+                                    phoneNumber, totalTransactions, totalSpent);
+                }
+                
+                if (rank == 1) {
+                    System.out.println("No customer transaction data available yet.");
+                }
+            }
+            
+        } catch (Exception e) {
+            System.out.println("⚠️ Error generating customer analytics: " + e.getMessage());
+            System.out.println("Note: Ensure customer and transaction tables exist.");
+        }
+        
+        System.out.println("\nPress Enter to continue...");
         scanner.nextLine();
         return true;
     }
     
     private boolean handleReports() {
-        System.out.println("\nREPORTS (MANAGER ACCESS)");
-        System.out.println("─".repeat(30));
-        System.out.println("Available Reports:");
-        System.out.println("1. Daily sales summary");
-        System.out.println("2. Inventory levels");
-        System.out.println("3. Team performance");
-        System.out.println("4. Customer analytics");
-        System.out.println("\nFull implementation coming soon!");
-        System.out.println("Press Enter to continue...");
+        while (true) {
+            System.out.println("\nREPORTS (MANAGER ACCESS)");
+            System.out.println("=".repeat(40));
+            System.out.println("1. Daily Sales Summary");
+            System.out.println("2. Inventory Levels");
+            System.out.println("3. Back to Main Menu");
+            System.out.println("=".repeat(40));
+            System.out.print("Choose an option (1-3): ");
+            
+            int choice = getChoice();
+            switch (choice) {
+                case 1:
+                    if (!showDailySalesSummary()) return false;
+                    break;
+                case 2:
+                    if (!showInventoryLevels()) return false;
+                    break;
+                case 3:
+                    return true;
+                default:
+                    System.out.println("Invalid choice! Please enter 1-3.");
+            }
+        }
+    }
+    
+    private boolean showDailySalesSummary() {
+        System.out.println("\nDAILY SALES SUMMARY");
+        System.out.println("=".repeat(80));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            // Get today's date
+            String today = new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date());
+            
+            // Daily totals
+            String totalQuery = "SELECT " +
+                              "COUNT(*) as total_transactions, " +
+                              "SUM(final_amount) as total_sales, " +
+                              "AVG(final_amount) as average_sale " +
+                              "FROM sales WHERE DATE(sale_date) = ?";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(totalQuery)) {
+                stmt.setString(1, today);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        System.out.printf("📊 DAILY OVERVIEW (%s)%n", today);
+                        System.out.println("─".repeat(50));
+                        System.out.printf("Total Transactions: %d%n", rs.getInt("total_transactions"));
+                        System.out.printf("Total Sales Amount: $%.2f%n", rs.getDouble("total_sales"));
+                        System.out.printf("Average Sale Amount: $%.2f%n", rs.getDouble("average_sale"));
+                        System.out.println();
+                    }
+                }
+            }
+            
+            // Top selling products today
+            String topProductsQuery = "SELECT p.product_name, " +
+                                    "SUM(si.quantity) as total_quantity, " +
+                                    "SUM(si.total_price) as total_revenue " +
+                                    "FROM sale_items si " +
+                                    "JOIN products p ON si.product_id = p.id " +
+                                    "JOIN sales s ON si.sale_id = s.id " +
+                                    "WHERE DATE(s.sale_date) = ? " +
+                                    "GROUP BY p.id, p.product_name " +
+                                    "ORDER BY total_quantity DESC " +
+                                    "LIMIT 5";
+            
+            System.out.println("🏆 TOP SELLING PRODUCTS TODAY");
+            System.out.println("─".repeat(70));
+            System.out.printf("%-30s %10s %15s%n", "Product Name", "Qty Sold", "Revenue");
+            System.out.println("─".repeat(70));
+            
+            try (PreparedStatement stmt = conn.prepareStatement(topProductsQuery)) {
+                stmt.setString(1, today);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    int rank = 1;
+                    while (rs.next() && rank <= 5) {
+                        System.out.printf("%-30s %10d %15.2f%n",
+                            rs.getString("product_name").substring(0, Math.min(30, rs.getString("product_name").length())),
+                            rs.getInt("total_quantity"),
+                            rs.getDouble("total_revenue"));
+                        rank++;
+                    }
+                }
+            }
+            
+            // Recent transactions
+            String recentQuery = "SELECT s.id, s.sale_date, s.final_amount, " +
+                               "CASE WHEN s.customer_name IS NOT NULL AND s.customer_name != '' THEN s.customer_name ELSE 'Walk-in Customer' END as customer_name " +
+                               "FROM sales s " +
+                               "WHERE DATE(s.sale_date) = ? " +
+                               "ORDER BY s.sale_date DESC " +
+                               "LIMIT 10";
+            
+            System.out.println("\n📋 RECENT TRANSACTIONS TODAY");
+            System.out.println("─".repeat(80));
+            System.out.printf("%-10s %-20s %-25s %15s%n", "Sale ID", "Time", "Customer", "Amount");
+            System.out.println("─".repeat(80));
+            
+            try (PreparedStatement stmt = conn.prepareStatement(recentQuery)) {
+                stmt.setString(1, today);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        String timeOnly = rs.getTimestamp("sale_date").toString().substring(11, 19);
+                        System.out.printf("%-10d %-20s %-25s $%14.2f%n",
+                            rs.getInt("id"),
+                            timeOnly,
+                            rs.getString("customer_name").substring(0, Math.min(25, rs.getString("customer_name").length())),
+                            rs.getDouble("final_amount"));
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            System.out.println("Error generating daily sales summary: " + e.getMessage());
+        }
+        
+        System.out.println("\nPress Enter to continue...");
+        scanner.nextLine();
+        return true;
+    }
+    
+    private boolean showInventoryLevels() {
+        System.out.println("\nINVENTORY LEVELS");
+        System.out.println("=".repeat(100));
+        
+        try (Connection conn = connectionPool.getConnection()) {
+            String query = "SELECT p.product_code, p.product_name, c.category_name, " +
+                          "p.unit_price, p.unit_of_measure, " +
+                          "p.reorder_level as current_stock, " +
+                          "p.expiry_date " +
+                          "FROM products p " +
+                          "LEFT JOIN categories c ON p.category_id = c.id " +
+                          "WHERE p.is_active = 1 " +
+                          "ORDER BY p.reorder_level ASC, p.product_name";
+            
+            System.out.printf("%-15s %-25s %-15s %10s %8s %12s %-12s%n",
+                "Product Code", "Product Name", "Category", "Price", "UoM", "Stock", "Expiry");
+            System.out.println("=".repeat(100));
+            
+            int lowStockCount = 0;
+            int outOfStockCount = 0;
+            
+            try (PreparedStatement stmt = conn.prepareStatement(query);
+                 ResultSet rs = stmt.executeQuery()) {
+                
+                while (rs.next()) {
+                    String productCode = rs.getString("product_code");
+                    String productName = rs.getString("product_name");
+                    String categoryName = rs.getString("category_name");
+                    double unitPrice = rs.getDouble("unit_price");
+                    String uom = rs.getString("unit_of_measure");
+                    int currentStock = rs.getInt("current_stock");
+                    String expiry = rs.getString("expiry_date");
+                    
+                    // Truncate long names for display
+                    productName = productName.substring(0, Math.min(25, productName.length()));
+                    categoryName = categoryName != null ? categoryName.substring(0, Math.min(15, categoryName.length())) : "None";
+                    expiry = expiry != null ? expiry : "N/A";
+                    
+                    // Color coding for stock levels (using reorder_level as approximate stock)
+                    String stockStatus = "";
+                    if (currentStock == 0) {
+                        stockStatus = "NONE SET";
+                        outOfStockCount++;
+                    } else if (currentStock <= 10) {
+                        stockStatus = "LOW (" + currentStock + ")";
+                        lowStockCount++;
+                    } else {
+                        stockStatus = "OK (" + currentStock + ")";
+                    }
+                    
+                    System.out.printf("%-15s %-25s %-15s $%8.2f %-8s %12s %-12s%n",
+                        productCode, productName, categoryName, unitPrice, uom, stockStatus, expiry);
+                }
+            }
+            
+            // Summary statistics
+            System.out.println("=".repeat(100));
+            System.out.println("\n📊 INVENTORY ALERTS");
+            System.out.println("─".repeat(40));
+            System.out.printf("🔴 Items with No Reorder Level: %d%n", outOfStockCount);
+            System.out.printf("🟡 Low Reorder Level Items (≤10): %d%n", lowStockCount);
+            
+            if (outOfStockCount > 0 || lowStockCount > 0) {
+                System.out.println("\n⚠️  IMMEDIATE ATTENTION REQUIRED:");
+                if (outOfStockCount > 0) {
+                    System.out.println("   • Set reorder levels for " + outOfStockCount + " items");
+                }
+                if (lowStockCount > 0) {
+                    System.out.println("   • Review " + lowStockCount + " low reorder level items");
+                }
+                System.out.println("\n📝 NOTE: This shows reorder level settings. For actual stock levels,");
+                System.out.println("   implement proper inventory tracking system.");
+            } else {
+                System.out.println("✅ All items have reasonable reorder level settings");
+            }
+            
+        } catch (Exception e) {
+            System.out.println("Error generating inventory levels report: " + e.getMessage());
+        }
+        
+        System.out.println("\nPress Enter to continue...");
         scanner.nextLine();
         return true;
     }
@@ -2474,40 +3536,6 @@ public class Main {
         System.out.println("Press Enter to continue...");
         scanner.nextLine();
         return true;
-    }
-    
-    private boolean handleSystemConfiguration() {
-        System.out.println("\nSYSTEM CONFIGURATION (ADMIN ACCESS)");
-        System.out.println("─".repeat(40));
-        System.out.println("1. Initialize Inventory Database Tables");
-        System.out.println("2. Database configuration");
-        System.out.println("3. Security settings");
-        System.out.println("4. Backup/restore");
-        System.out.println("5. System preferences");
-        System.out.println("6. Back to Main Menu");
-        System.out.print("Choose option (1-6): ");
-        
-        int choice = getChoice();
-        switch (choice) {
-            case 1:
-                initializeInventoryTables();
-                System.out.println("\nPress Enter to continue...");
-                scanner.nextLine();
-                return true;
-            case 2:
-            case 3:
-            case 4:
-            case 5:
-                System.out.println("\nFull implementation coming soon!");
-                System.out.println("Press Enter to continue...");
-                scanner.nextLine();
-                return true;
-            case 6:
-                return true;
-            default:
-                System.out.println("Invalid choice!");
-                return true;
-        }
     }
     
     private boolean logout() {
@@ -2925,6 +3953,9 @@ public class Main {
                                 if (executeStockTransfer(conn, productId, transferQty, transferType)) {
                                     System.out.println("\nSTOCK TRANSFER COMPLETED SUCCESSFULLY!");
                                     System.out.println("Transferred " + transferQty + " units of " + name);
+                                    
+                                    // Check if automatic shelf restocking is needed
+                                    checkAndAutoRestock(conn, productId, name);
                                 } else {
                                     System.out.println("Transfer failed!");
                                 }
@@ -3184,10 +4215,12 @@ public class Main {
         } else {
             for (int i = 0; i < cart.size(); i++) {
                 CartItem item = cart.get(i);
+                // Calculate effective unit price after discount
+                double effectiveUnitPrice = item.unitPrice * (1 - item.discountPercent / 100.0);
                 System.out.printf("%-4d %-12s %-25s %-4d LKR%-6.2f %-8.1f LKR%-8.2f%n",
                                 (i + 1), item.productCode, 
                                 item.productName.length() > 25 ? item.productName.substring(0, 25) : item.productName,
-                                item.quantity, item.unitPrice, item.discountPercent, item.lineTotal);
+                                item.quantity, effectiveUnitPrice, item.discountPercent, item.lineTotal);
             }
         }
         
@@ -3199,8 +4232,9 @@ public class Main {
     
     private boolean addProductToCart(java.util.List<CartItem> cart, String productCode) {
         try (Connection conn = connectionPool.getConnection()) {
-            // Get product details with stock information (handle missing inventory table gracefully)
-            String query = "SELECT p.id as product_id, p.product_code, p.product_name, p.brand, p.unit_price as selling_price, " +
+            // Get product details with stock information AND discount information
+            String query = "SELECT p.id as product_id, p.product_code, p.product_name, p.brand, " +
+                          "p.unit_price as selling_price, p.discount_amount, p.discount_percentage, " +
                           "COALESCE(il.shelf_qty, 0) as shelf_qty, " +
                           "COALESCE(il.warehouse_qty, 0) as warehouse_qty, " +
                           "COALESCE(il.shelf_capacity, 50) as shelf_capacity " +
@@ -3217,13 +4251,23 @@ public class Main {
                     String name = rs.getString("product_name");
                     String brand = rs.getString("brand");
                     double price = rs.getDouble("selling_price");
+                    double productDiscountAmount = rs.getDouble("discount_amount");
+                    double productDiscountPercent = rs.getDouble("discount_percentage");
                     int shelfQty = rs.getInt("shelf_qty");
                     int warehouseQty = rs.getInt("warehouse_qty");
                     int totalAvailable = shelfQty + warehouseQty;
                     
+                    // Calculate effective price after product discounts
+                    double finalPrice = price - productDiscountAmount - (price * productDiscountPercent / 100);
+                    
                     System.out.println("\nProduct Found:");
                     System.out.println("Name: " + name + " (" + brand + ")");
-                    System.out.println("Price: LKR " + price);
+                    System.out.println("Original Price: LKR " + String.format("%.2f", price));
+                    if (productDiscountAmount > 0 || productDiscountPercent > 0) {
+                        System.out.println("Product Discount: LKR " + String.format("%.2f", productDiscountAmount) + 
+                                         " + " + String.format("%.1f", productDiscountPercent) + "%");
+                        System.out.println("Discounted Price: LKR " + String.format("%.2f", finalPrice));
+                    }
                     System.out.println("Available Stock: " + shelfQty + " (shelf) + " + warehouseQty + " (warehouse) = " + totalAvailable);
                     
                     if (totalAvailable <= 0) {
@@ -3268,23 +4312,52 @@ public class Main {
                                 return false;
                             }
                             existingItem.quantity = newQty;
+                            
+                            // Update discount to include product discount if not already applied
+                            double productDiscountPercentage = 0.0;
+                            if (price > 0) {
+                                double productDiscountTotal = productDiscountAmount + (price * productDiscountPercent / 100);
+                                productDiscountPercentage = (productDiscountTotal / price) * 100;
+                            }
+                            
+                            // If current discount is less than product discount, update it
+                            if (existingItem.discountPercent < productDiscountPercentage) {
+                                existingItem.discountPercent = productDiscountPercentage;
+                                System.out.println("Applied product discount: " + String.format("%.1f", productDiscountPercentage) + "%");
+                            }
+                            
                             existingItem.lineTotal = existingItem.quantity * existingItem.unitPrice * (1 - existingItem.discountPercent / 100);
                         } else {
+                            // Calculate product's built-in discount percentage
+                            double productDiscountPercentage = 0.0;
+                            if (price > 0) {
+                                double productDiscountTotal = productDiscountAmount + (price * productDiscountPercent / 100);
+                                productDiscountPercentage = (productDiscountTotal / price) * 100;
+                            }
+                            
                             // Add discount if applicable
-                            double discountPercent = 0.0;
-                            System.out.print("Apply discount % (0 for none): ");
+                            double additionalDiscountPercent = 0.0;
+                            if (productDiscountPercentage > 0) {
+                                System.out.println("Product has built-in discount: " + String.format("%.1f", productDiscountPercentage) + "%");
+                                System.out.print("Apply additional discount % (0 for none): ");
+                            } else {
+                                System.out.print("Apply discount % (0 for none): ");
+                            }
                             try {
                                 String discInput = scanner.nextLine().trim();
                                 if (!discInput.isEmpty()) {
-                                    discountPercent = Double.parseDouble(discInput);
-                                    if (discountPercent < 0 || discountPercent > 50) {
-                                        System.out.println("Invalid discount! Using 0%");
-                                        discountPercent = 0.0;
+                                    additionalDiscountPercent = Double.parseDouble(discInput);
+                                    if (additionalDiscountPercent < 0 || additionalDiscountPercent > 50) {
+                                        System.out.println("Invalid additional discount! Using 0%");
+                                        additionalDiscountPercent = 0.0;
                                     }
                                 }
                             } catch (NumberFormatException e) {
-                                discountPercent = 0.0;
+                                additionalDiscountPercent = 0.0;
                             }
+                            
+                            // Total discount is product discount + additional discount
+                            double totalDiscountPercent = productDiscountPercentage + additionalDiscountPercent;
                             
                             CartItem newItem = new CartItem();
                             newItem.productId = productId;
@@ -3292,8 +4365,8 @@ public class Main {
                             newItem.productName = name + " (" + brand + ")";
                             newItem.quantity = requestedQty;
                             newItem.unitPrice = price;
-                            newItem.discountPercent = discountPercent;
-                            newItem.lineTotal = requestedQty * price * (1 - discountPercent / 100);
+                            newItem.discountPercent = totalDiscountPercent;
+                            newItem.lineTotal = requestedQty * price * (1 - totalDiscountPercent / 100);
                             
                             cart.add(newItem);
                         }
@@ -3370,7 +4443,7 @@ public class Main {
             }
             
             // Check if customer exists, if not create new customer
-            int customerId = getOrCreateCustomer(phoneNumber);
+            CustomerInfo customerInfo = getOrCreateCustomer(phoneNumber);
             
             System.out.println("\nFINAL BILL:");
             System.out.printf("Subtotal: LKR %.2f%n", subtotal);
@@ -3398,7 +4471,7 @@ public class Main {
                 
                 if (confirm.equals("y") || confirm.equals("yes")) {
                     // Process the transaction
-                    String billNumber = processTransaction(customerId, cart, subtotal, totalDiscount, finalTotal, cashReceived, change);
+                    String billNumber = processTransaction(customerInfo, cart, subtotal, totalDiscount, finalTotal, cashReceived, change);
                     
                     if (billNumber != null) {
                         System.out.println("\nTRANSACTION COMPLETED SUCCESSFULLY!");
@@ -3428,22 +4501,23 @@ public class Main {
         }
     }
     
-    private int getOrCreateCustomer(String phoneNumber) {
+    private CustomerInfo getOrCreateCustomer(String phoneNumber) {
         try (Connection conn = connectionPool.getConnection()) {
-            // First check if customer exists
-            String checkQuery = "SELECT customer_id, customer_name FROM customers WHERE phone_number = ?";
+            // Check if we have this customer in previous sales
+            String checkQuery = "SELECT customer_name, customer_email FROM sales WHERE customer_phone = ? LIMIT 1";
             try (PreparedStatement stmt = conn.prepareStatement(checkQuery)) {
                 stmt.setString(1, phoneNumber);
-                ResultSet rs = stmt.executeQuery();
-                
-                if (rs.next()) {
-                    String name = rs.getString("customer_name");
-                    System.out.println("Existing customer: " + (name != null ? name : "Unknown"));
-                    return rs.getInt("customer_id");
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        String name = rs.getString("customer_name");
+                        String email = rs.getString("customer_email");
+                        System.out.println("Returning customer: " + (name != null ? name : "Unknown"));
+                        return new CustomerInfo(name, email, phoneNumber, true);
+                    }
                 }
             }
             
-            // Customer doesn't exist, create new one
+            // Customer doesn't exist in previous sales, get new customer info
             System.out.print("New customer! Enter name: ");
             String name = scanner.nextLine().trim();
             
@@ -3451,29 +4525,18 @@ public class Main {
             String email = scanner.nextLine().trim();
             if (email.isEmpty()) email = null;
             
-            String insertQuery = "INSERT INTO customers (phone_number, customer_name, email) VALUES (?, ?, ?)";
-            try (PreparedStatement stmt = conn.prepareStatement(insertQuery, PreparedStatement.RETURN_GENERATED_KEYS)) {
-                stmt.setString(1, phoneNumber);
-                stmt.setString(2, name.isEmpty() ? null : name);
-                stmt.setString(3, email);
-                
-                int affected = stmt.executeUpdate();
-                if (affected > 0) {
-                    ResultSet keys = stmt.getGeneratedKeys();
-                    if (keys.next()) {
-                        System.out.println("Customer registered successfully!");
-                        return keys.getInt(1);
-                    }
-                }
-            }
+            System.out.println("Customer information will be saved with this transaction.");
+            
+            return new CustomerInfo(name, email, phoneNumber, false);
+            
         } catch (Exception e) {
-            System.out.println("Error managing customer (table may not exist yet): " + e.getMessage());
+            System.out.println("Note: Customer lookup not available: " + e.getMessage());
         }
         
-        return 1; // Default customer ID if table doesn't exist yet
+        return new CustomerInfo("Walk-in Customer", null, phoneNumber, false);
     }
     
-    private String processTransaction(int customerId, java.util.List<CartItem> cart, 
+    private String processTransaction(CustomerInfo customerInfo, java.util.List<CartItem> cart, 
                                      double subtotal, double totalDiscount, double finalTotal,
                                      double cashReceived, double change) {
         try (Connection conn = connectionPool.getConnection()) {
@@ -3483,14 +4546,17 @@ public class Main {
                 // Get next bill number
                 String billNumber = getNextBillNumber(conn);
                 
-                // For now, just generate receipt file and simulate stock update
-                // (actual database updates will work once inventory tables are created)
-                generateReceiptFile(billNumber, customerId, cart, subtotal, totalDiscount, finalTotal, cashReceived, change);
+                // Save transaction to database
+                int transactionId = saveTransactionToDatabase(conn, billNumber, customerInfo, subtotal, totalDiscount, finalTotal, cashReceived, change, cart);
                 
-                // Simulate stock update (will be real once inventory_locations table exists)
+                // Generate receipt file
+                generateReceiptFile(billNumber, customerInfo, cart, subtotal, totalDiscount, finalTotal, cashReceived, change);
+                
+                // Update stock after sale
                 updateStockAfterSale(conn, cart, billNumber);
                 
                 conn.commit();
+                System.out.println("✅ Transaction saved to database with ID: " + transactionId);
                 return billNumber;
                 
             } catch (Exception e) {
@@ -3504,29 +4570,86 @@ public class Main {
             System.out.println("Transaction processing: " + e.getMessage());
             // Still generate receipt file for testing
             String billNumber = String.format("%03d", (int)(System.currentTimeMillis() % 1000));
-            generateReceiptFile(billNumber, customerId, cart, subtotal, totalDiscount, finalTotal, cashReceived, change);
+            generateReceiptFile(billNumber, customerInfo, cart, subtotal, totalDiscount, finalTotal, cashReceived, change);
             return billNumber;
+        }
+    }
+    
+    private int saveTransactionToDatabase(Connection conn, String billNumber, CustomerInfo customerInfo, 
+                                         double subtotal, double totalDiscount, double finalTotal,
+                                         double cashReceived, double change, java.util.List<CartItem> cart) throws Exception {
+        try {
+            // Insert into sales table (actual schema uses 'sales', not 'transactions')
+            String insertSale = "INSERT INTO sales (bill_number, customer_name, customer_email, customer_phone, " +
+                               "total_amount, discount_amount, final_amount, payment_method, cashier_id) " +
+                               "VALUES (?, ?, ?, ?, ?, ?, ?, 'CASH', ?)";
+            
+            int saleId;
+            try (PreparedStatement stmt = conn.prepareStatement(insertSale, Statement.RETURN_GENERATED_KEYS)) {
+                stmt.setString(1, billNumber);
+                stmt.setString(2, customerInfo.name);
+                stmt.setString(3, customerInfo.email);
+                stmt.setString(4, customerInfo.phone);
+                stmt.setDouble(5, finalTotal);  // total_amount
+                stmt.setDouble(6, totalDiscount); // discount_amount
+                stmt.setDouble(7, finalTotal);   // final_amount
+                stmt.setInt(8, currentUser.getId()); // cashier_id
+                
+                stmt.executeUpdate();
+                
+                try (ResultSet rs = stmt.getGeneratedKeys()) {
+                    if (rs.next()) {
+                        saleId = rs.getInt(1);
+                    } else {
+                        throw new Exception("Failed to get sale ID");
+                    }
+                }
+            }
+            
+            // Insert into sale_items table (actual schema uses 'sale_items', not 'transaction_items')
+            String insertItem = "INSERT INTO sale_items (sale_id, product_id, quantity, " +
+                               "unit_price, discount_amount, total_price) VALUES (?, ?, ?, ?, ?, ?)";
+            
+            try (PreparedStatement stmt = conn.prepareStatement(insertItem)) {
+                for (CartItem item : cart) {
+                    stmt.setInt(1, saleId);
+                    stmt.setInt(2, item.productId);
+                    stmt.setInt(3, item.quantity);
+                    stmt.setDouble(4, item.unitPrice);
+                    
+                    // Calculate discount amount for this item
+                    double itemDiscountAmount = (item.unitPrice * item.quantity * item.discountPercent) / 100.0;
+                    stmt.setDouble(5, itemDiscountAmount);
+                    stmt.setDouble(6, item.lineTotal);
+                    stmt.addBatch();
+                }
+                stmt.executeBatch();
+            }
+            
+            return saleId;
+            
+        } catch (Exception e) {
+            // Log the error but don't fail the transaction completely
+            System.out.println("⚠️ Warning: Could not save to database: " + e.getMessage());
+            System.out.println("Transaction receipt will be generated, but not stored in database.");
+            throw e; // Re-throw to trigger rollback
         }
     }
     
     private String getNextBillNumber(Connection conn) throws Exception {
         try {
-            // Update and get next bill number
-            String updateQuery = "UPDATE bill_counter SET last_bill_number = last_bill_number + 1 WHERE counter_id = 1";
-            try (PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
-                stmt.executeUpdate();
-            }
-            
-            String selectQuery = "SELECT last_bill_number FROM bill_counter WHERE counter_id = 1";
-            try (PreparedStatement stmt = conn.prepareStatement(selectQuery)) {
-                ResultSet rs = stmt.executeQuery();
+            // Since bill_counter table doesn't exist, get the next bill number from sales table
+            String query = "SELECT COALESCE(MAX(CAST(SUBSTRING(bill_number, 1) AS UNSIGNED)), 0) + 1 as next_bill FROM sales";
+            try (PreparedStatement stmt = conn.prepareStatement(query);
+                 ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
-                    int billNum = rs.getInt("last_bill_number");
+                    int billNum = rs.getInt("next_bill");
                     return String.format("%03d", billNum);
                 }
             }
         } catch (Exception e) {
-            // Table doesn't exist yet, use timestamp-based bill number
+            // If there's any issue, use timestamp-based bill number
+            System.out.println("Warning: Could not get bill number from database, using timestamp: " + e.getMessage());
         }
         
         return String.format("%03d", (int)(System.currentTimeMillis() % 1000));
@@ -3555,7 +4678,7 @@ public class Main {
         }
     }
     
-    private void generateReceiptFile(String billNumber, int customerId, java.util.List<CartItem> cart,
+    private void generateReceiptFile(String billNumber, CustomerInfo customerInfo, java.util.List<CartItem> cart,
                                    double subtotal, double totalDiscount, double finalTotal,
                                    double cashReceived, double change) {
         try {
@@ -3571,8 +4694,14 @@ public class Main {
             writer.println("Cashier: " + (currentUser != null ? currentUser.getFullName() : "System Administrator"));
             writer.println();
             
-            // Customer info (simplified for now)
-            writer.println("Customer ID: " + customerId);
+            // Customer info
+            writer.println("Customer: " + (customerInfo.name != null ? customerInfo.name : "Walk-in Customer"));
+            if (customerInfo.phone != null) {
+                writer.println("Phone: " + customerInfo.phone);
+            }
+            if (customerInfo.email != null) {
+                writer.println("Email: " + customerInfo.email);
+            }
             writer.println();
             
             writer.println("ITEMS:");
@@ -3617,6 +4746,76 @@ public class Main {
         double lineTotal;
     }
     
+    // Helper class for customer information
+    private static class CustomerInfo {
+        String name;
+        String email;
+        String phone;
+        boolean isExisting;
+        
+        CustomerInfo(String name, String email, String phone, boolean isExisting) {
+            this.name = name;
+            this.email = email;
+            this.phone = phone;
+            this.isExisting = isExisting;
+        }
+    }
+    
+    private void initializeSalesTables() {
+        try (Connection conn = connectionPool.getConnection()) {
+            System.out.println("Checking and creating sales tables...");
+            
+            // Create sales table
+            String createSalesTable = "CREATE TABLE IF NOT EXISTS sales (" +
+                "id INT AUTO_INCREMENT PRIMARY KEY," +
+                "bill_number VARCHAR(50) UNIQUE NOT NULL," +
+                "customer_name VARCHAR(255)," +
+                "customer_email VARCHAR(255)," +
+                "customer_phone VARCHAR(20)," +
+                "total_amount DECIMAL(10,2) NOT NULL," +
+                "discount_amount DECIMAL(10,2) DEFAULT 0.00," +
+                "tax_amount DECIMAL(10,2) DEFAULT 0.00," +
+                "final_amount DECIMAL(10,2) NOT NULL," +
+                "payment_method ENUM('CASH', 'CARD', 'DIGITAL', 'CREDIT') DEFAULT 'CASH'," +
+                "sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
+                "cashier_id INT," +
+                "notes TEXT," +
+                "FOREIGN KEY (cashier_id) REFERENCES users(id) ON DELETE SET NULL," +
+                "INDEX idx_bill_number (bill_number)," +
+                "INDEX idx_sale_date (sale_date)," +
+                "INDEX idx_cashier_id (cashier_id)" +
+                ")";
+            
+            // Create sale_items table
+            String createSaleItemsTable = "CREATE TABLE IF NOT EXISTS sale_items (" +
+                "id INT AUTO_INCREMENT PRIMARY KEY," +
+                "sale_id INT NOT NULL," +
+                "product_id INT NOT NULL," +
+                "quantity INT NOT NULL," +
+                "unit_price DECIMAL(10,2) NOT NULL," +
+                "discount_amount DECIMAL(10,2) DEFAULT 0.00," +
+                "total_price DECIMAL(10,2) NOT NULL," +
+                "FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE," +
+                "FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT," +
+                "INDEX idx_sale_id (sale_id)," +
+                "INDEX idx_product_id (product_id)" +
+                ")";
+            
+            // Execute table creation
+            try (PreparedStatement stmt = conn.prepareStatement(createSalesTable)) {
+                stmt.executeUpdate();
+            }
+            try (PreparedStatement stmt = conn.prepareStatement(createSaleItemsTable)) {
+                stmt.executeUpdate();
+            }
+            
+            System.out.println("✓ Sales tables verified/created successfully!");
+            
+        } catch (Exception e) {
+            System.out.println("Warning: Could not initialize sales tables: " + e.getMessage());
+        }
+    }
+    
     // Utility method to clear screen
     private void clearScreen() {
         try {
@@ -3636,125 +4835,291 @@ public class Main {
         }
     }
     
-    // Method to initialize inventory tables if they don't exist
-    private void initializeInventoryTables() {
-        try (Connection conn = connectionPool.getConnection()) {
+    /**
+     * Automatic Shelf Restocking System
+     * Checks if shelf stock is low and automatically restocks from warehouse
+     * Uses product-specific minimum thresholds and shelf capacities
+     */
+    private void checkAndAutoRestock(Connection conn, int productId, String productName) throws Exception {
+        // Get current stock levels and product-specific settings
+        String stockQuery = "SELECT il.shelf_qty, il.shelf_capacity, il.warehouse_qty, " +
+                          "p.shelf_minimum_threshold, p.auto_restock_enabled " +
+                          "FROM inventory_locations il " +
+                          "JOIN products p ON il.product_id = p.id " +
+                          "WHERE il.product_id = ?";
+        try (PreparedStatement stmt = conn.prepareStatement(stockQuery)) {
+            stmt.setInt(1, productId);
+            ResultSet rs = stmt.executeQuery();
             
-            System.out.println("Checking and creating inventory tables...");
-            
-            // Create inventory_locations table
-            String createInventoryLocations = "CREATE TABLE IF NOT EXISTS inventory_locations (" +
-                "inventory_id INT AUTO_INCREMENT PRIMARY KEY," +
-                "product_id INT NOT NULL," +
-                "shelf_qty INT DEFAULT 0," +
-                "shelf_capacity INT DEFAULT 50," +
-                "warehouse_qty INT DEFAULT 0," +
-                "online_qty INT DEFAULT 0," +
-                "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP," +
-                "FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE," +
-                "UNIQUE KEY unique_product_inventory (product_id)" +
-                ")";
-            
-            // Create customers table
-            String createCustomers = "CREATE TABLE IF NOT EXISTS customers (" +
-                "customer_id INT AUTO_INCREMENT PRIMARY KEY," +
-                "phone_number VARCHAR(15) UNIQUE NOT NULL," +
-                "customer_name VARCHAR(100)," +
-                "email VARCHAR(100)," +
-                "registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
-                ")";
-            
-            // Create bill_counter table
-            String createBillCounter = "CREATE TABLE IF NOT EXISTS bill_counter (" +
-                "counter_id INT PRIMARY KEY DEFAULT 1," +
-                "last_bill_number INT DEFAULT 0," +
-                "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" +
-                ")";
-            
-            // Create transactions table
-            String createTransactions = "CREATE TABLE IF NOT EXISTS transactions (" +
-                "transaction_id INT AUTO_INCREMENT PRIMARY KEY," +
-                "bill_number VARCHAR(20) UNIQUE NOT NULL," +
-                "customer_id INT," +
-                "transaction_type ENUM('PHYSICAL_STORE', 'ONLINE') DEFAULT 'PHYSICAL_STORE'," +
-                "subtotal DECIMAL(10,2) NOT NULL," +
-                "total_discount DECIMAL(10,2) DEFAULT 0.00," +
-                "final_total DECIMAL(10,2) NOT NULL," +
-                "cash_received DECIMAL(10,2)," +
-                "change_amount DECIMAL(10,2)," +
-                "transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
-                "FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE SET NULL" +
-                ")";
-            
-            // Create transaction_items table
-            String createTransactionItems = "CREATE TABLE IF NOT EXISTS transaction_items (" +
-                "item_id INT AUTO_INCREMENT PRIMARY KEY," +
-                "transaction_id INT NOT NULL," +
-                "product_id INT NOT NULL," +
-                "quantity INT NOT NULL," +
-                "unit_price DECIMAL(10,2) NOT NULL," +
-                "discount_percent DECIMAL(5,2) DEFAULT 0.00," +
-                "line_total DECIMAL(10,2) NOT NULL," +
-                "FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE," +
-                "FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE" +
-                ")";
-            
-            // Create stock_movements table
-            String createStockMovements = "CREATE TABLE IF NOT EXISTS stock_movements (" +
-                "movement_id INT AUTO_INCREMENT PRIMARY KEY," +
-                "product_id INT NOT NULL," +
-                "movement_type VARCHAR(50) NOT NULL," +
-                "location_from VARCHAR(20)," +
-                "location_to VARCHAR(20)," +
-                "quantity INT NOT NULL," +
-                "reference_id VARCHAR(50)," +
-                "movement_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
-                "created_by VARCHAR(100) DEFAULT 'System Administrator'," +
-                "FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE" +
-                ")";
-            
-            // Execute table creation queries
-            try (PreparedStatement stmt = conn.prepareStatement(createInventoryLocations)) {
-                stmt.executeUpdate();
+            if (rs.next()) {
+                int shelfQty = rs.getInt("shelf_qty");
+                int shelfCapacity = rs.getInt("shelf_capacity");
+                int warehouseQty = rs.getInt("warehouse_qty");
+                int productMinThreshold = rs.getInt("shelf_minimum_threshold");
+                boolean autoRestockEnabled = rs.getBoolean("auto_restock_enabled");
+                
+                // Check if auto-restock is enabled for this product
+                if (!autoRestockEnabled) {
+                    System.out.println("ℹ️ Auto-restock disabled for product: " + productName);
+                    return;
+                }
+                
+                // Use product-specific minimum threshold
+                int restockThreshold = productMinThreshold;
+                int targetShelfStock = (int)(shelfCapacity * 0.8); // Fill to 80% capacity
+                
+                if (shelfQty <= restockThreshold && warehouseQty > 0) {
+                    int restockQty = Math.min(targetShelfStock - shelfQty, warehouseQty);
+                    
+                    if (restockQty > 0) {
+                        System.out.println("\n🔄 AUTO-RESTOCKING TRIGGERED:");
+                        System.out.println("Product: " + productName);
+                        System.out.println("Shelf Stock Low: " + shelfQty + " ≤ " + restockThreshold + " (product-specific threshold)");
+                        System.out.println("Target Shelf Level: " + targetShelfStock + " (" + (int)(80) + "% of " + shelfCapacity + " capacity)");
+                        System.out.println("Auto-transferring " + restockQty + " units from warehouse to shelf...");
+                        
+                        if (executeStockTransfer(conn, productId, restockQty, "WAREHOUSE_TO_SHELF")) {
+                            System.out.println("✅ Auto-restock completed! Shelf: " + shelfQty + " → " + (shelfQty + restockQty));
+                            
+                            // Log the auto-restock
+                            String logQuery = "INSERT INTO stock_movements (product_id, movement_type, quantity, notes, created_by) VALUES (?, ?, ?, ?, ?)";
+                            try (PreparedStatement logStmt = conn.prepareStatement(logQuery)) {
+                                logStmt.setInt(1, productId);
+                                logStmt.setString(2, "AUTO_RESTOCK");
+                                logStmt.setInt(3, restockQty);
+                                logStmt.setString(4, "Automatic shelf restock triggered by low stock");
+                                logStmt.setString(5, "SYSTEM AUTO-RESTOCK");
+                                logStmt.executeUpdate();
+                            }
+                        } else {
+                            System.out.println("⚠️ Auto-restock failed!");
+                        }
+                    }
+                } else if (shelfQty <= restockThreshold && warehouseQty == 0) {
+                    System.out.println("\n⚠️ LOW STOCK ALERT:");
+                    System.out.println("Product: " + productName);
+                    System.out.println("Shelf: " + shelfQty + " units (LOW)");
+                    System.out.println("Warehouse: " + warehouseQty + " units (EMPTY)");
+                    System.out.println("🛒 REORDER RECOMMENDED!");
+                }
             }
-            try (PreparedStatement stmt = conn.prepareStatement(createCustomers)) {
-                stmt.executeUpdate();
-            }
-            try (PreparedStatement stmt = conn.prepareStatement(createBillCounter)) {
-                stmt.executeUpdate();
-            }
-            try (PreparedStatement stmt = conn.prepareStatement(createTransactions)) {
-                stmt.executeUpdate();
-            }
-            try (PreparedStatement stmt = conn.prepareStatement(createTransactionItems)) {
-                stmt.executeUpdate();
-            }
-            try (PreparedStatement stmt = conn.prepareStatement(createStockMovements)) {
-                stmt.executeUpdate();
-            }
+            rs.close();
+        }
+    }
+    
+    /**
+     * FIFO Stock Allocation System
+     * Ensures oldest stock (by expiry date) is used first
+     */
+    private boolean allocateStockFIFO(Connection conn, int productId, int requiredQty) throws Exception {
+        // Get available batches ordered by expiry date (FIFO)
+        String batchQuery = "SELECT batch_id, quantity, expiry_date, location FROM expiry_tracking " +
+                          "WHERE product_id = ? AND status = 'ACTIVE' AND quantity > 0 " +
+                          "ORDER BY expiry_date ASC, created_date ASC";
+        
+        try (PreparedStatement stmt = conn.prepareStatement(batchQuery)) {
+            stmt.setInt(1, productId);
+            ResultSet rs = stmt.executeQuery();
             
-            // Initialize bill counter
-            String initBillCounter = "INSERT IGNORE INTO bill_counter (counter_id, last_bill_number) VALUES (1, 0)";
-            try (PreparedStatement stmt = conn.prepareStatement(initBillCounter)) {
-                stmt.executeUpdate();
+            int remainingQty = requiredQty;
+            
+            while (rs.next() && remainingQty > 0) {
+                int batchId = rs.getInt("batch_id");
+                int batchQty = rs.getInt("quantity");
+                String location = rs.getString("location");
+                java.sql.Date expiryDate = rs.getDate("expiry_date");
+                
+                // Check if batch is expired
+                if (expiryDate != null && expiryDate.before(new java.sql.Date(System.currentTimeMillis()))) {
+                    System.out.println("⚠️ Expired batch found: " + batchId + " (Expiry: " + expiryDate + ")");
+                    continue;
+                }
+                
+                int qtyToUse = Math.min(remainingQty, batchQty);
+                
+                // Update batch quantity
+                String updateBatch = "UPDATE expiry_tracking SET quantity = quantity - ? WHERE batch_id = ?";
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateBatch)) {
+                    updateStmt.setInt(1, qtyToUse);
+                    updateStmt.setInt(2, batchId);
+                    updateStmt.executeUpdate();
+                }
+                
+                // Update inventory location
+                String updateLocation = "UPDATE inventory_locations SET " + 
+                                      location.toLowerCase() + "_qty = " + location.toLowerCase() + "_qty - ? " +
+                                      "WHERE product_id = ?";
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateLocation)) {
+                    updateStmt.setInt(1, qtyToUse);
+                    updateStmt.setInt(2, productId);
+                    updateStmt.executeUpdate();
+                }
+                
+                remainingQty -= qtyToUse;
+                
+                System.out.println("✓ Used " + qtyToUse + " units from " + location + 
+                                 (expiryDate != null ? " (Expires: " + expiryDate + ")" : " (No expiry)"));
             }
+            rs.close();
             
-            // Initialize inventory records for existing products
-            String initInventory = "INSERT IGNORE INTO inventory_locations (product_id, shelf_qty, shelf_capacity, warehouse_qty, online_qty) " +
-                                 "SELECT product_id, 0, 50, 0, 0 FROM products " +
-                                 "WHERE product_id NOT IN (SELECT product_id FROM inventory_locations)";
+            return remainingQty == 0; // True if all required quantity was allocated
+        }
+    }
+    
+    /**
+     * Remove Expired Stock and Generate Report
+     */
+    private void removeExpiredStock(Connection conn) throws Exception {
+        String expiredQuery = "SELECT et.batch_id, et.product_id, p.product_name, et.quantity, " +
+                            "et.cost_price, et.expiry_date, et.location " +
+                            "FROM expiry_tracking et " +
+                            "JOIN products p ON et.product_id = p.id " +
+                            "WHERE et.expiry_date < CURDATE() AND et.status = 'ACTIVE'";
+        
+        try (PreparedStatement stmt = conn.prepareStatement(expiredQuery)) {
+            ResultSet rs = stmt.executeQuery();
             
-            try (PreparedStatement stmt = conn.prepareStatement(initInventory)) {
-                int added = stmt.executeUpdate();
-                if (added > 0) {
-                    System.out.println("✓ Initialized inventory records for " + added + " products");
+            double totalValue = 0;
+            int totalItems = 0;
+            
+            System.out.println("\n🗑️ EXPIRED STOCK REMOVAL REPORT");
+            System.out.println("=====================================");
+            System.out.printf("%-10s %-20s %-8s %-12s %-10s %-12s%n", 
+                            "Batch ID", "Product Name", "Qty", "Expiry Date", "Location", "Value (LKR)");
+            System.out.println("---------------------------------------------------------------------");
+            
+            while (rs.next()) {
+                int batchId = rs.getInt("batch_id");
+                int productId = rs.getInt("product_id");
+                String productName = rs.getString("product_name");
+                int quantity = rs.getInt("quantity");
+                double costPrice = rs.getDouble("cost_price");
+                java.sql.Date expiryDate = rs.getDate("expiry_date");
+                String location = rs.getString("location");
+                
+                double batchValue = quantity * costPrice;
+                totalValue += batchValue;
+                totalItems += quantity;
+                
+                System.out.printf("%-10d %-20s %-8d %-12s %-10s %-12.2f%n", 
+                                batchId, productName, quantity, expiryDate, location, batchValue);
+                
+                // Mark batch as expired
+                String updateBatch = "UPDATE expiry_tracking SET status = 'EXPIRED' WHERE batch_id = ?";
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateBatch)) {
+                    updateStmt.setInt(1, batchId);
+                    updateStmt.executeUpdate();
+                }
+                
+                // Remove from inventory
+                String updateInventory = "UPDATE inventory_locations SET " + 
+                                       location.toLowerCase() + "_qty = " + location.toLowerCase() + "_qty - ? " +
+                                       "WHERE product_id = ?";
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateInventory)) {
+                    updateStmt.setInt(1, quantity);
+                    updateStmt.setInt(2, productId);
+                    updateStmt.executeUpdate();
+                }
+                
+                // Log the removal
+                String logQuery = "INSERT INTO stock_movements (product_id, movement_type, quantity, notes, created_by) " +
+                                "VALUES (?, ?, ?, ?, ?)";
+                try (PreparedStatement logStmt = conn.prepareStatement(logQuery)) {
+                    logStmt.setInt(1, productId);
+                    logStmt.setString(2, "EXPIRED_REMOVAL");
+                    logStmt.setInt(3, quantity);
+                    logStmt.setString(4, "Expired stock removed - Batch: " + batchId + ", Expiry: " + expiryDate);
+                    logStmt.setString(5, "SYSTEM EXPIRED_REMOVAL");
+                    logStmt.executeUpdate();
+                }
+            }
+            rs.close();
+            
+            System.out.println("---------------------------------------------------------------------");
+            System.out.printf("TOTAL: %d items removed, LKR %.2f value lost%n", totalItems, totalValue);
+            System.out.println("=====================================");
+            
+            if (totalItems == 0) {
+                System.out.println("✅ No expired stock found!");
+            }
+        }
+    }
+
+    /**
+     * Display categories hierarchically with codes instead of IDs
+     * Shows main categories and their subcategories in a user-friendly format
+     */
+    private void displayCategoriesHierarchically(Connection conn) throws Exception {
+        String categoryQuery = "SELECT c1.id, c1.category_code, c1.category_name, c1.parent_category_id, " +
+                             "c2.category_code as parent_code, c2.category_name as parent_name " +
+                             "FROM categories c1 " +
+                             "LEFT JOIN categories c2 ON c1.parent_category_id = c2.id " +
+                             "WHERE c1.is_active = true " +
+                             "ORDER BY COALESCE(c2.category_code, c1.category_code), c1.category_code";
+        
+        try (PreparedStatement stmt = conn.prepareStatement(categoryQuery);
+             ResultSet rs = stmt.executeQuery()) {
+            
+            String currentParent = "";
+            boolean hasCategories = false;
+            
+            while (rs.next()) {
+                hasCategories = true;
+                String code = rs.getString("category_code");
+                String name = rs.getString("category_name");
+                String parentCode = rs.getString("parent_code");
+                String parentName = rs.getString("parent_name");
+                
+                // If this is a main category (no parent)
+                if (parentCode == null) {
+                    System.out.printf("📂 %s - %s%n", code, name);
+                    currentParent = code;
+                } else {
+                    // This is a subcategory
+                    if (!currentParent.equals(parentCode)) {
+                        // Print parent category if we haven't shown it yet
+                        System.out.printf("📂 %s - %s%n", parentCode, parentName);
+                        currentParent = parentCode;
+                    }
+                    System.out.printf("  └── %s - %s%n", code, name);
                 }
             }
             
-            System.out.println("✓ Inventory system tables verified/created successfully!");
-            
-        } catch (Exception e) {
-            System.out.println("Error initializing inventory tables: " + e.getMessage());
+            if (!hasCategories) {
+                System.out.println("No categories found! Please add categories first.");
+                throw new Exception("No categories available");
+            }
+        }
+    }
+
+    /**
+     * Get category ID by category code with hierarchy validation
+     */
+    private int getCategoryByCode(Connection conn, String categoryCode) throws Exception {
+        String query = "SELECT c1.id, c1.category_name, c2.category_code as parent_code, c2.category_name as parent_name " +
+                      "FROM categories c1 " +
+                      "LEFT JOIN categories c2 ON c1.parent_category_id = c2.id " +
+                      "WHERE c1.category_code = ? AND c1.is_active = true";
+        
+        try (PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, categoryCode.toUpperCase());
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    String categoryName = rs.getString("category_name");
+                    String parentCode = rs.getString("parent_code");
+                    String parentName = rs.getString("parent_name");
+                    
+                    if (parentCode != null) {
+                        System.out.println("Selected: " + parentCode + " > " + categoryCode + " - " + categoryName);
+                    } else {
+                        System.out.println("Selected: " + categoryCode + " - " + categoryName);
+                    }
+                    
+                    return rs.getInt("id");
+                } else {
+                    throw new Exception("Invalid category code: " + categoryCode);
+                }
+            }
         }
     }
 }
